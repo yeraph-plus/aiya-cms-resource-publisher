@@ -1,0 +1,40 @@
+{
+    "name": "aiya/aiya-publish",
+    "description": "REST API for an external publishing tool (aiya-publish/v1): resource posts with the FileServe data field, application-password auth.",
+    "type": "wordpress-plugin",
+    "license": "GPL-3.0-or-later",
+    "require": {
+        "php": ">=8.4 <8.6"
+    },
+    "require-dev": {
+        "dealerdirect/phpcodesniffer-composer-installer": "^1.0",
+        "php-parallel-lint/php-parallel-lint": "^1.4",
+        "phpcompatibility/phpcompatibility-wp": "^2.1",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^11.5",
+        "szepeviktor/phpstan-wordpress": "^2.0",
+        "squizlabs/php_codesniffer": "^3.13",
+        "wp-coding-standards/wpcs": "^3.1"
+    },
+    "repositories": {
+        "packagist": {
+            "type": "composer",
+            "url": "https://mirrors.cloud.tencent.com/composer/"
+        }
+    },
+    "scripts": {
+        "php:lint": "@php ./vendor/bin/parallel-lint --exclude .git --exclude vendor .",
+        "php:cs": "@php ./vendor/bin/phpcs",
+        "php:cbf": "@php ./vendor/bin/phpcbf",
+        "php:stan": "@php ./vendor/bin/phpstan analyse --memory-limit=1G",
+        "php:unit": "@php ./vendor/bin/phpunit"
+    },
+    "config": {
+        "platform": {
+            "php": "8.4.0"
+        },
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    }
+}
