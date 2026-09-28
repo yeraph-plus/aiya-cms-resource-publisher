@@ -1,0 +1,166 @@
+/**
+ * TypeScript replica of the FileServe data model (aiya-core
+ * Domain/FileServe/Config and the aiya-publish plugin's FileServeConfig):
+ * one JSON object keyed by auto-generated short ids, every group naming its
+ * adapter and carrying that adapter's fields plus the common title/price
+ * pair. Normalization mirrors the PHP semantics so an edited row pushes a
+ * configuration the domain accepts byte for byte.
+ */
+
+export interface FieldDef {
+    id: string;
+    type: "text" | "number";
+    default: string | number;
+    min?: number;
+}
+
+export const ADAPTER_FIELDS: Record<string, FieldDef[]> = {
+    platform: [
+        { id: "url", type: "text", default: "" },
+        { id: "code", type: "text", default: "" },
+    ],
+    openlist_list: [
+        { id: "path", type: "text", default: "" },
+        { id: "password", type: "text", default: "" },
+        { id: "per_page", type: "number", default: 0, min: 0 },
+    ],
+    openlist_search: [
+        { id: "keywords", type: "text", default: "" },
+        { id: "parent", type: "text", default: "" },
+        { id: "password", type: "text", default: "" },
+        { id: "per_page", type: "number", default: 0, min: 0 },
+    ],
+    gofile_api: [{ id: "folder_id", type: "text", default: "" }],
+};
+
+export const COMMON_FIELDS: FieldDef[] = [
+    { id: "title", type: "text", default: "" },
+    { id: "price", type: "number", default: 0, min: 0 },
+];
+
+export const ADAPTER_LABELS: Record<string, string> = {
+    platform: "网盘链接",
+    openlist_list: "OpenList 目录",
+    openlist_search: "OpenList 搜索",
+    gofile_api: "GoFile",
+};
+
+export type FieldValue = string | number | null;
+export type FileGroup = Record<string, FieldValue> & { adapter: string };
+export type FileServeConfig = Record<string, FileGroup>;
+
+/** A submitted key reduced to something storable; "" when nothing is left of it. */
+export function sanitizeId(raw: string): string {
+    return raw.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 16);
+}
+
+/** Loose stand-in for PHP's sanitize_text_field: no tags, collapsed blank edges. */
+function sanitizeText(value: string): string {
+    return value.replace(/<[^>]*>/g, "").trim();
+}
+
+export function normalizeConfig(raw: unknown): { config: FileServeConfig; errors: string[] } {
+    if (raw === null || raw === undefined || raw === "" || (Array.isArray(raw) && raw.length === 0)) {
+        return { config: {}, errors: [] };
+    }
+
+    let decoded: unknown = raw;
+    if (typeof raw === "string") {
+        try {
+            decoded = JSON.parse(raw);
+        } catch {
+            return { config: {}, errors: ["文件配置不是可读的 JSON。"] };
+        }
+    }
+    if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
+        return { config: {}, errors: ["文件配置不是可读的 JSON。"] };
+    }
+
+    const config: FileServeConfig = {};
+    const errors: string[] = [];
+
+    for (const [rawId, rawGroup] of Object.entries(decoded as Record<string, unknown>)) {
+        const id = sanitizeId(rawId);
+        if (id === "") {
+            errors.push("有数据组键名无法读取。");
+            continue;
+        }
+        if (rawGroup === null || typeof rawGroup !== "object" || Array.isArray(rawGroup)) {
+            errors.push(`数据组 ${id} 无法读取。`);
+            continue;
+        }
+
+        const group = rawGroup as Record<string, unknown>;
+        const adapter = typeof group.adapter === "string" ? group.adapter : "";
+        const fields = ADAPTER_FIELDS[adapter];
+        if (!fields) {
+            errors.push(`数据组 ${id} 使用的适配器不可用：${adapter || "（空）"}。`);
+            continue;
+        }
+
+        const normalized: Record<string, FieldValue> = {};
+        let broken = false;
+        for (const field of [...fields, ...COMMON_FIELDS]) {
+            const value = group[field.id] ?? field.default;
+            if (field.type === "text") {
+                normalized[field.id] = sanitizeText(String(value ?? ""));
+                continue;
+            }
+            if (value === "" || value === null || value === undefined) {
+                normalized[field.id] = null;
+                continue;
+            }
+            const num = typeof value === "number" ? value : Number(value);
+            if (!Number.isFinite(num)) {
+                errors.push(`数据组 ${id} 的字段 ${field.id} 不是数字。`);
+                broken = true;
+                break;
+            }
+            normalized[field.id] = field.min !== undefined ? Math.max(field.min, num) : num;
+        }
+        if (broken) {
+            continue;
+        }
+
+        normalized.price = Math.max(0, Math.trunc(Number(normalized.price ?? 0)));
+        config[id] = { ...normalized, adapter } as FileGroup;
+    }
+
+    if (errors.length > 0) {
+        return { config: {}, errors };
+    }
+    return { config, errors: [] };
+}
+
+/** All fields at their defaults, ready for the editor. */
+export function emptyGroup(adapter: string): FileGroup {
+    const group: Record<string, FieldValue> = {};
+    for (const field of [...(ADAPTER_FIELDS[adapter] ?? []), ...COMMON_FIELDS]) {
+        group[field.id] = field.default;
+    }
+    return { ...group, adapter } as FileGroup;
+}
+
+/** The next free short id: one past the highest numeric key, like the domain. */
+export function nextId(config: FileServeConfig): string {
+    let highest = 0;
+    for (const key of Object.keys(config)) {
+        if (/^\d+$/.test(key)) {
+            highest = Math.max(highest, Number.parseInt(key, 10));
+        }
+    }
+    return String(highest + 1);
+}
+
+/** A display summary: how many groups and what they cost per file in total. */
+export function configSummary(config: FileServeConfig | null): string {
+    if (!config) {
+        return "—";
+    }
+    const groups = Object.keys(config).length;
+    const total = Object.values(config).reduce(
+        (sum, group) => sum + (typeof group.price === "number" ? group.price : 0),
+        0,
+    );
+    return `${groups} 组 · ${total} 分/次`;
+}

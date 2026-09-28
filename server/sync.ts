@@ -1,0 +1,208 @@
+import {
+    getPostByRemoteId,
+    getSettings,
+    insertPost,
+    listPosts,
+    parseSnapshot,
+    replaceTerms,
+    setSetting,
+    setTermRefs,
+    snapshotFromRemote,
+    updatePostRow,
+    upsertAuthor,
+    type PostRow,
+} from "./db.js";
+import { listResources, ping, taxonomies, WpError, type WpItem } from "./wp.js";
+
+export interface SyncOutcome {
+    ok: boolean;
+    error: string | null;
+    fetched: number;
+    created: number;
+    refreshed: number;
+    conflicts: number;
+    missing: number;
+}
+
+function creds() {
+    const settings = getSettings();
+    return { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword };
+}
+
+function message(error: unknown): string {
+    if (error instanceof WpError) {
+        return `HTTP ${error.status}：${error.message}`;
+    }
+    return String(error);
+}
+
+function now(): string {
+    return new Date().toISOString();
+}
+
+function remoteToState(item: WpItem): {
+    status: string;
+    title: string;
+    content: string;
+    authorId: number;
+    dateLocal: string;
+    dateGmt: string;
+    modifiedGmt: string;
+    fileserve: string | null;
+    termRefs: Record<string, string[]>;
+} {
+    const termRefs: Record<string, string[]> = {};
+    for (const [taxonomy, terms] of Object.entries(item.terms ?? {})) {
+        termRefs[taxonomy] = terms.map((term) => String(term.id));
+    }
+    return {
+        status: item.status,
+        title: item.title,
+        content: item.content,
+        authorId: item.authorId,
+        dateLocal: item.date,
+        dateGmt: item.dateGmt,
+        modifiedGmt: item.modifiedGmt,
+        fileserve: item.fileserve ? JSON.stringify(item.fileserve) : null,
+        termRefs,
+    };
+}
+
+function mergeRemote(item: WpItem, outcome: SyncOutcome): void {
+    upsertAuthor(item.authorId, item.authorName);
+    const remote = remoteToState(item);
+    const existing: PostRow | undefined = getPostByRemoteId(item.id);
+
+    if (!existing) {
+        const localId = insertPost({
+            postId: item.id,
+            status: remote.status,
+            title: remote.title,
+            content: remote.content,
+            authorId: remote.authorId,
+            dateLocal: remote.dateLocal,
+            dateGmt: remote.dateGmt,
+            modifiedGmt: remote.modifiedGmt,
+            fileserve: remote.fileserve,
+            dirty: false,
+            conflict: false,
+            missing: false,
+            lastSyncedGmt: now(),
+            snapshot: JSON.stringify(snapshotFromRemote(item, remote.termRefs)),
+        });
+        setTermRefs(localId, remote.termRefs);
+        outcome.created += 1;
+        return;
+    }
+
+    if (existing.dirty) {
+        // Local edits win; only flag the conflict when the online post moved
+        // past the version this row was based on.
+        const snapshot = parseSnapshot(existing.snapshot);
+        if (snapshot && remote.modifiedGmt > snapshot.modifiedGmt) {
+            updatePostRow(existing.localId, { conflict: true, missing: false, lastSyncedGmt: now() });
+            outcome.conflicts += 1;
+            return;
+        }
+        updatePostRow(existing.localId, { missing: false, lastSyncedGmt: now() });
+        outcome.refreshed += 1;
+        return;
+    }
+
+    updatePostRow(existing.localId, {
+        status: remote.status,
+        title: remote.title,
+        content: remote.content,
+        authorId: remote.authorId,
+        dateLocal: remote.dateLocal,
+        dateGmt: remote.dateGmt,
+        modifiedGmt: remote.modifiedGmt,
+        fileserve: remote.fileserve,
+        dirty: false,
+        conflict: false,
+        missing: false,
+        lastSyncedGmt: now(),
+        snapshot: JSON.stringify(snapshotFromRemote(item, remote.termRefs)),
+    });
+    setTermRefs(existing.localId, remote.termRefs);
+    outcome.refreshed += 1;
+}
+
+/**
+ * Pull the site into the local database. First sync is a full sweep; after
+ * that only posts modified since the last cursor are fetched. Rows with local
+ * edits are never overwritten — a genuine upstream change marks them as
+ * conflicting instead.
+ */
+export async function runSync(): Promise<SyncOutcome> {
+    const outcome: SyncOutcome = { ok: false, error: null, fetched: 0, created: 0, refreshed: 0, conflicts: 0, missing: 0 };
+    const settings = getSettings();
+    if (!settings.siteUrl || !settings.username || !settings.appPassword) {
+        outcome.error = "先在设置里填好站点地址、用户名和应用密码。";
+        return outcome;
+    }
+
+    const site = creds();
+    let probe;
+    try {
+        probe = await ping(site);
+    } catch (error) {
+        outcome.error = message(error);
+        return outcome;
+    }
+    if (!probe.resourceAvailable) {
+        outcome.error = "站点上没有 resource 文章类型（aiya-core 未启用？）。";
+        return outcome;
+    }
+
+    try {
+        replaceTerms(await taxonomies(site));
+
+        const cursor = settings.lastSyncCursor;
+        const incremental = Boolean(cursor);
+        const perPage = 50;
+        let page = 1;
+        const seen = new Set<number>();
+        let maxModified = cursor ?? "";
+
+        for (;;) {
+            const items = await listResources(site, page, perPage, incremental ? (cursor ?? undefined) : undefined);
+            for (const item of items) {
+                // A row the publisher itself pushed a moment ago can come
+                // back mid-sync; merging it is harmless — dirty rows keep
+                // their local state.
+                mergeRemote(item, outcome);
+                seen.add(item.id);
+                if (item.modifiedGmt > maxModified) {
+                    maxModified = item.modifiedGmt;
+                }
+            }
+            outcome.fetched += items.length;
+            if (items.length < perPage) {
+                break;
+            }
+            page += 1;
+        }
+
+        if (!incremental) {
+            for (const row of listPosts()) {
+                const gone = row.postId !== null && !seen.has(row.postId);
+                if (gone !== row.missing) {
+                    updatePostRow(row.localId, { missing: gone });
+                }
+                if (gone) {
+                    outcome.missing += 1;
+                }
+            }
+        }
+
+        if (maxModified !== "") {
+            setSetting("lastSyncCursor", maxModified);
+        }
+        outcome.ok = true;
+        return outcome;
+    } catch (error) {
+        outcome.error = message(error);
+        return outcome;
+    }
+}
