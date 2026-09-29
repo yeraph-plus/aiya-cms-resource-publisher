@@ -14,16 +14,15 @@
         "build": "vite build",
         "start": "tsx server/index.ts",
         "test": "vitest run",
-        "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.web.json"
+        "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.web.json",
+        "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist-server/index.js --external:better-sqlite3 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+        "app:dir": "npm run build && npm run build:server && electron-builder --dir",
+        "app:win": "npm run build && npm run build:server && electron-builder --win"
     },
     "dependencies": {
         "@fastify/static": "^8.0.0",
-        "ag-grid-community": "^34.0.0",
-        "ag-grid-react": "^34.0.0",
         "better-sqlite3": "^12.0.0",
         "fastify": "^5.0.0",
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0",
         "undici": "^7.30.0"
     },
     "devDependencies": {
@@ -33,7 +32,13 @@
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
         "@vitejs/plugin-react": "^5.0.0",
+        "ag-grid-community": "^34.0.0",
+        "ag-grid-react": "^34.0.0",
         "concurrently": "^9.0.0",
+        "electron": "42.11.8",
+        "electron-builder": "^26.15.3",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
         "tailwindcss": "^4.3.0",
         "tsx": "^4.19.0",
         "typescript": "^6.0.0",
@@ -43,5 +48,45 @@
     "allowScripts": {
         "better-sqlite3@12.11.1": true,
         "esbuild@0.28.2": true
+    },
+    "main": "electron/main.mjs",
+    "author": "Yeraph",
+    "build": {
+        "appId": "local.aiya.publisher",
+        "productName": "AIYA发帖器",
+        "directories": {
+            "output": "release"
+        },
+        "files": [
+            "electron/**",
+            "dist/**",
+            "dist-server/**",
+            "package.json"
+        ],
+        "asarUnpack": [
+            "node_modules/better-sqlite3/**",
+            "dist/**"
+        ],
+        "win": {
+            "target": [
+                {
+                    "target": "nsis",
+                    "arch": [
+                        "x64"
+                    ]
+                },
+                {
+                    "target": "portable",
+                    "arch": [
+                        "x64"
+                    ]
+                }
+            ]
+        },
+        "nsis": {
+            "oneClick": false,
+            "allowToChangeInstallationDirectory": true
+        },
+        "npmRebuild": false
     }
 }
