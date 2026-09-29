@@ -11,6 +11,7 @@ use WP_Query;
 use WP_REST_Request;
 use WP_REST_Response;
 use WP_REST_Server;
+use WP_User_Query;
 
 /**
  * The whole aiya-publish/v1 surface: a connection probe, the term registry of
@@ -36,6 +37,14 @@ final class ResourceController
             [
                 'methods' => WP_REST_Server::READABLE,
                 'callback' => fn (): WP_REST_Response => $this->taxonomies(),
+                'permission_callback' => fn (): bool|WP_Error => Auth::require('edit_posts'),
+            ],
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/users', [
+            [
+                'methods' => WP_REST_Server::READABLE,
+                'callback' => fn (): WP_REST_Response => $this->users(),
                 'permission_callback' => fn (): bool|WP_Error => Auth::require('edit_posts'),
             ],
         ]);
@@ -92,6 +101,32 @@ final class ResourceController
             'resourceAvailable' => post_type_exists('resource'),
             'version' => defined('AIYA_PUBLISH_VERSION') ? AIYA_PUBLISH_VERSION : '',
         ]);
+    }
+
+    /**
+     * The accounts a post can be authored by: everyone with edit_posts
+     * (author and up). The publishing tool picks an author per row from
+     * this list; assigning one needs edit_others_posts at write time.
+     */
+    private function users(): WP_REST_Response
+    {
+        $query = new WP_User_Query([
+            'capability__in' => ['edit_posts'],
+            'orderby' => 'display_name',
+            'order' => 'ASC',
+            'number' => 500,
+        ]);
+
+        $items = [];
+        foreach ($query->get_results() as $user) {
+            $items[] = [
+                'id' => (int) $user->ID,
+                'login' => $user->user_login,
+                'name' => $user->display_name !== '' ? $user->display_name : $user->user_login,
+            ];
+        }
+
+        return new WP_REST_Response($items);
     }
 
     private function taxonomies(): WP_REST_Response

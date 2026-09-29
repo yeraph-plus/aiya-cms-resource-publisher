@@ -14,6 +14,7 @@
 | 路由 | 说明 |
 |---|---|
 | `GET /ping` | 连接测试：当前用户、关键能力、resource 类型是否存在 |
+| `GET /users` | 可作为发帖署名的账号（`edit_posts` 及以上），`{id, login, name}` 裸数组 |
 | `GET /taxonomies` | resource 六词法与全部术语（id/name/slug/count） |
 | `GET /resource` | 同步列表：`page`/`per_page`(≤100)/`modified_after`(GMT，增量)；`X-WP-Total` 头 |
 | `GET /resource/{id}` | 单条 |
