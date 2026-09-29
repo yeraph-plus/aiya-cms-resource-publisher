@@ -5,3 +5,4 @@ release/
 publisher.db
 publisher.db-*
 *.log
+.native/
