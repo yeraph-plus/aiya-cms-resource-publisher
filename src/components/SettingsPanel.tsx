@@ -121,16 +121,18 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
                     </select>
                 </div>
 
-                <div className="px-5 pb-5 flex items-center gap-2">
-                    <button className="btn btn-primary" disabled={busy} onClick={save}>
-                        保存
-                    </button>
-                    <button className="btn" disabled={busy} onClick={test}>
-                        测试连接
-                    </button>
-                    <span className="text-xs text-neutral-400 ml-2">
+                <div className="px-5 pb-5">
+                    <div className="flex items-center gap-2">
+                        <button className="btn btn-primary" disabled={busy} onClick={save}>
+                            保存
+                        </button>
+                        <button className="btn" disabled={busy} onClick={test}>
+                            测试连接
+                        </button>
+                    </div>
+                    <p className="mt-2 text-xs text-neutral-400">
                         测试连接用的是表单当前值，不会先保存。作者列表在「同步」时从站点拉取（可发帖的账号）。
-                    </span>
+                    </p>
                 </div>
             </div>
         </div>
