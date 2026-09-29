@@ -11,8 +11,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const source = path.join(root, "wordpress_plugins", "aiya-publish");
-const target = path.join(root, "..", "wp-content", "plugins", "aiya-publish");
+const source = path.join(root, "wordpress_plugins", "aiya-cms-resource-publisher");
+const target = path.join(root, "..", "wp-content", "plugins", "aiya-cms-publish");
 
 if (!existsSync(path.join(source, "aiya-publish.php"))) {
     console.error(`plugin source not found at ${source}`);
@@ -49,4 +49,4 @@ cpSync(source, target, {
 for (const rel of removed) {
     rmSync(path.join(target, rel), { recursive: true, force: true });
 }
-console.log(`synced wordpress_plugins/aiya-publish -> wp-content/plugins/aiya-publish (${removed.length} stale entries removed)`);
+console.log(`synced wordpress_plugins/aiya-cms-resource-publisher -> wp-content/plugins/aiya-cms-publish (${removed.length} stale entries removed)`);

@@ -1,0 +1,7 @@
+*.php text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.dist text eol=lf
+*.neon text eol=lf
+*.ts text eol=lf
+*.mjs text eol=lf
