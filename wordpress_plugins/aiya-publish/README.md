@@ -1,6 +1,8 @@
 # aiya-publish
 
-为外部发帖器（工作区 `publisher/`）提供 REST API 的独立 WordPress 插件，命名空间 `aiya-publish/v1`。与 aiya-core **零代码耦合**（不调用其类、不挂其内部过滤器），但 resource 文章类型由 aiya-core 注册，运行时以其启用为前提。
+为外部发帖器提供 REST API 的 WordPress 插件，命名空间 `aiya-publish/v1`。**随发帖器仓库单仓库维护**：本目录是源码真身（`publisher/wordpress_plugins/aiya-publish`），`wp-content/plugins/aiya-publish` 只是 `npm run plugin:sync`（发帖器仓库）产出的部署副本；历史上的独立 git 仓库已 subtree 并入发帖器仓库。
+
+**依赖 aiya-core**：插件头声明 `Requires Plugins: aiya-core`（WP 6.5+，`Requires at least` 亦为 6.5）——未安装/未启用 aiya-core 时 WordPress 直接拒绝激活；CLI 等旁路激活时入口文件兜底：显示管理提示且不注册任何路由。与 aiya-core 仍保持**零代码耦合**（不调用其类、不挂其内部过滤器），resource 文章类型由 core 注册，运行时以其启用为前提。
 
 ## 认证
 
@@ -32,7 +34,9 @@
 
 ## 本地开发
 
-宿主机无需 PHP，全部在容器内执行（vendor 已随仓库安装过一次；重建时先下载 composer.phar）：
+**源在本仓库**（`publisher/wordpress_plugins/aiya-publish`），改动后用发帖器仓库的 `npm run plugin:sync` 镜像到 `wp-content/plugins/aiya-publish` 再验证（目标侧 `vendor/` 与 `.git` 不参与同步）。
+
+宿主机无需 PHP，全部在容器内执行（vendor 已随部署副本安装过一次；重建时先下载 composer.phar）：
 
 ```bash
 docker compose run --rm --entrypoint sh wpcli \

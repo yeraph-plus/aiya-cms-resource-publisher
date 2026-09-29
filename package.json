@@ -19,7 +19,8 @@
         "app:dir": "npm run build && npm run build:server && npm run native:electron && node scripts/build-app.mjs dir && npm run native:node",
         "app:win": "npm run build && npm run build:server && npm run native:electron && node scripts/build-app.mjs win && npm run native:node",
         "native:node": "node scripts/native-sync.mjs node",
-        "native:electron": "node scripts/native-sync.mjs electron"
+        "native:electron": "node scripts/native-sync.mjs electron",
+        "plugin:sync": "node scripts/plugin-sync.mjs"
     },
     "dependencies": {
         "@fastify/static": "^8.0.0",

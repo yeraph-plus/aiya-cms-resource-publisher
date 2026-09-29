@@ -55,3 +55,11 @@ npm test        # vitest：fileserve 模型与推送载荷构建
 ```
 
 结构：`server/`（Fastify + better-sqlite3 + WP 客户端 + 同步/推送）、`src/`（React 19 + Tailwind 4 + AG Grid Community）、`shared/`（fileserve 数据模型，前后端共用）。
+
+## 配套 WP 插件（wordpress_plugins/aiya-publish）
+
+WP 侧配套插件随本仓库单仓库维护，源码在 `wordpress_plugins/aiya-publish/`（REST 命名空间 `aiya-publish/v1`，端点语义见其 `README.md`）。
+
+- 插件头声明 **`Requires Plugins: aiya-core`**：未安装/未启用 aiya-core 时 WordPress 拒绝激活（resource 类型由 core 注册）；CLI 等旁路激活时入口文件还有运行时兜底——显示管理提示且不注册任何路由。
+- **部署**：`npm run plugin:sync` 把源码镜像到 `../wp-content/plugins/aiya-publish`（跳过 `.git`/`vendor`；目标侧 `vendor/` 是容器内 QA 工具，装一次即可，不同步）。开发循环：改 `wordpress_plugins/aiya-publish` → `npm run plugin:sync` → 容器内检查（见插件 README）。
+- 该插件历史上是独立 git 仓库，已 subtree 并入本仓库（提交历史保留）。
