@@ -8,20 +8,19 @@ async function json<T>(response: Response): Promise<T> {
     return (await response.json()) as T;
 }
 
-async function call<T>(url: string, init?: RequestInit): Promise<T> {
-    return json<T>(await fetch(url, init));
-}
-
-function withBody(payload: unknown): RequestInit {
-    return {
-        method: payload === undefined ? "GET" : "POST",
-        headers: payload === undefined ? undefined : { "Content-Type": "application/json" },
-        body: payload === undefined ? undefined : JSON.stringify(payload),
-    };
+/** Every call spells out its method — the server registers verb-specific routes. */
+async function call<T>(url: string, method: "GET" | "POST" | "PUT" | "DELETE", payload?: unknown): Promise<T> {
+    return json<T>(
+        await fetch(url, {
+            method,
+            headers: payload === undefined ? undefined : { "Content-Type": "application/json" },
+            body: payload === undefined ? undefined : JSON.stringify(payload),
+        }),
+    );
 }
 
 export function fetchState(): Promise<StateDTO> {
-    return call<StateDTO>("/api/state");
+    return call<StateDTO>("/api/state", "GET");
 }
 
 export interface RowPatch {
@@ -34,27 +33,21 @@ export interface RowPatch {
     terms?: Record<string, string[]>;
 }
 
-export async function saveRow(localId: number, patch: RowPatch): Promise<RowDTO> {
-    return json<RowDTO>(
-        await fetch(`/api/posts/${localId}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(patch),
-        }),
-    );
+export function saveRow(localId: number, patch: RowPatch): Promise<RowDTO> {
+    return call<RowDTO>(`/api/posts/${localId}`, "PUT", patch);
 }
 
 export async function createRow(title?: string): Promise<number> {
-    const body = await json<{ localId: number }>(await fetch("/api/posts", withBody({ title })));
+    const body = await call<{ localId: number }>("/api/posts", "POST", { title });
     return body.localId;
 }
 
-export async function deleteRow(localId: number): Promise<void> {
-    await json<{ ok: boolean }>(await fetch(`/api/posts/${localId}`, { method: "DELETE" }));
+export function deleteRow(localId: number): Promise<{ ok: boolean }> {
+    return call<{ ok: boolean }>(`/api/posts/${localId}`, "DELETE");
 }
 
-export async function revertRow(localId: number): Promise<void> {
-    await json<{ ok: boolean }>(await fetch(`/api/posts/${localId}/revert`, { method: "POST" }));
+export function revertRow(localId: number): Promise<{ ok: boolean }> {
+    return call<{ ok: boolean }>(`/api/posts/${localId}/revert`, "POST");
 }
 
 export interface SaveSettingsPayload {
@@ -65,7 +58,7 @@ export interface SaveSettingsPayload {
 }
 
 export function saveSettings(payload: SaveSettingsPayload): Promise<{ ok: boolean }> {
-    return call<{ ok: boolean }>("/api/settings", withBody(payload));
+    return call<{ ok: boolean }>("/api/settings", "PUT", payload);
 }
 
 export interface ConnectResult {
@@ -75,7 +68,7 @@ export interface ConnectResult {
 }
 
 export function connect(): Promise<ConnectResult> {
-    return call<ConnectResult>("/api/connect", withBody({}));
+    return call<ConnectResult>("/api/connect", "POST", {});
 }
 
 export interface SyncOutcomeDTO {
@@ -89,7 +82,7 @@ export interface SyncOutcomeDTO {
 }
 
 export function sync(): Promise<SyncOutcomeDTO> {
-    return call<SyncOutcomeDTO>("/api/sync", withBody({}));
+    return call<SyncOutcomeDTO>("/api/sync", "POST", {});
 }
 
 export interface PushOutcomeDTO {
@@ -101,5 +94,5 @@ export interface PushOutcomeDTO {
 }
 
 export function push(localIds?: number[]): Promise<PushOutcomeDTO> {
-    return call<PushOutcomeDTO>("/api/push", withBody({ localIds }));
+    return call<PushOutcomeDTO>("/api/push", "POST", { localIds });
 }

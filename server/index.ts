@@ -1,6 +1,6 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import {
@@ -23,9 +23,8 @@ import { runPush } from "./push.js";
 import { normalizeSiteUrl, ping, WpError } from "./wp.js";
 import { normalizeConfig } from "../shared/fileserve.js";
 
-const app = Fastify({ logger: false, bodyLimit: 16 * 1024 * 1024 });
-
-const PORT = Number(process.env.PUBLISHER_PORT ?? 5175);
+export async function buildApp(): Promise<FastifyInstance> {
+    const app = Fastify({ logger: false, bodyLimit: 16 * 1024 * 1024 });
 
 function errorMessage(error: unknown): string {
     if (error instanceof WpError) {
@@ -44,7 +43,7 @@ function hasCreds(): boolean {
     return Boolean(settings.siteUrl && settings.username && settings.appPassword);
 }
 
-app.get("/api/state", async () => {
+    app.get("/api/state", async () => {
     const settings = getSettings();
     const grouped: Record<string, { id: number; name: string; slug: string }[]> = {};
     for (const term of listTerms()) {
@@ -77,7 +76,7 @@ app.get("/api/state", async () => {
     };
 });
 
-app.put("/api/settings", async (request, reply) => {
+    app.put("/api/settings", async (request, reply) => {
     const body = request.body as Record<string, unknown>;
     if (body.siteUrl !== undefined) {
         setSetting("siteUrl", normalizeSiteUrl(String(body.siteUrl ?? "")));
@@ -94,7 +93,7 @@ app.put("/api/settings", async (request, reply) => {
     return reply.code(200).send({ ok: true });
 });
 
-app.post("/api/connect", async () => {
+    app.post("/api/connect", async () => {
     if (!hasCreds()) {
         return { ok: false, error: "先填好站点地址、用户名和应用密码。" };
     }
@@ -109,7 +108,7 @@ app.post("/api/connect", async () => {
     }
 });
 
-app.post("/api/posts", async (request) => {
+    app.post("/api/posts", async (request) => {
     const body = (request.body ?? {}) as Record<string, unknown>;
     const settings = getSettings();
     const localId = insertPost({
@@ -122,7 +121,7 @@ app.post("/api/posts", async (request) => {
     return { localId };
 });
 
-app.put("/api/posts/:id", async (request, reply) => {
+    app.put("/api/posts/:id", async (request, reply) => {
     const localId = Number((request.params as { id: string }).id);
     const row = getPost(localId);
     if (!row) {
@@ -190,12 +189,12 @@ app.put("/api/posts/:id", async (request, reply) => {
     };
 });
 
-app.delete("/api/posts/:id", async (request) => {
+    app.delete("/api/posts/:id", async (request) => {
     deletePost(Number((request.params as { id: string }).id));
     return { ok: true };
 });
 
-app.post("/api/posts/:id/revert", async (request, reply) => {
+    app.post("/api/posts/:id/revert", async (request, reply) => {
     const localId = Number((request.params as { id: string }).id);
     const row = getPost(localId);
     if (!row) {
@@ -222,47 +221,68 @@ app.post("/api/posts/:id/revert", async (request, reply) => {
     return { ok: true };
 });
 
-app.post("/api/sync", async () => {
+    app.post("/api/sync", async () => {
     const outcome = await runSync();
     return outcome;
 });
 
-app.post("/api/push", async (request) => {
+    app.post("/api/push", async (request) => {
     const body = (request.body ?? {}) as { localIds?: number[] };
     const outcome = await runPush(Array.isArray(body.localIds) ? body.localIds : undefined);
     return outcome;
 });
 
-const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
-if (existsSync(distDir)) {
-    await app.register(fastifyStatic, { root: distDir });
-    app.setNotFoundHandler(async (request, reply) => {
-        if (request.url.startsWith("/api/")) {
-            return reply.code(404).send({ error: `not found: ${request.method} ${request.url}` });
-        }
-        return reply.type("text/html").sendFile("index.html");
-    });
-}
-
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    // tsx watch restarts the child with SIGTERM; closing the listener here
-    // frees the port before exit, or the next start dies on EADDRINUSE.
-    process.on(signal, () => {
-        app.close().finally(() => process.exit(0));
-    });
-}
-
-app.listen({ port: PORT, host: "127.0.0.1" }).then(() => {
-    console.log(`AIYA Publisher listening on http://localhost:${PORT}`);
-    console.log(`db: ${dbPath}`);
-}).catch((error) => {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "EADDRINUSE") {
-        console.error(`端口 ${PORT} 已被占用——旧的发帖器实例还在运行，先结束它再启动。`);
-    } else {
-        console.error(error);
+    const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
+    if (existsSync(distDir)) {
+        await app.register(fastifyStatic, { root: distDir });
+        app.setNotFoundHandler(async (request, reply) => {
+            if (request.url.startsWith("/api/")) {
+                return reply.code(404).send({ error: `not found: ${request.method} ${request.url}` });
+            }
+            return reply.type("text/html").sendFile("index.html");
+        });
     }
-    process.exit(1);
-});
 
-export { app };
+    return app;
+}
+
+const PORT = Number(process.env.PUBLISHER_PORT ?? 5175);
+
+// Only a directly-run process binds the port; a test import builds the app
+// and talks to it with inject.
+const isEntry = (() => {
+    const entry = process.argv[1];
+    if (!entry) {
+        return false;
+    }
+    try {
+        return pathToFileURL(entry).href === import.meta.url;
+    } catch {
+        return false;
+    }
+})();
+
+if (isEntry) {
+    const app = await buildApp();
+
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+        // tsx watch restarts the child with SIGTERM; closing the listener here
+        // frees the port before exit, or the next start dies on EADDRINUSE.
+        process.on(signal, () => {
+            app.close().finally(() => process.exit(0));
+        });
+    }
+
+    app.listen({ port: PORT, host: "127.0.0.1" }).then(() => {
+        console.log(`AIYA Publisher listening on http://localhost:${PORT}`);
+        console.log(`db: ${dbPath}`);
+    }).catch((error) => {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EADDRINUSE") {
+            console.error(`端口 ${PORT} 已被占用——旧的发帖器实例还在运行，先结束它再启动。`);
+        } else {
+            console.error(error);
+        }
+        process.exit(1);
+    });
+}
