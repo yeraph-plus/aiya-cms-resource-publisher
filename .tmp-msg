@@ -1,0 +1,21 @@
+Add proxy support, online authors, checkbox terms, and a settings modal
+
+Four iterations in one pass:
+
+- Outbound site calls go through undici with an optional ProxyAgent
+  built from the new proxyUrl setting (userinfo becomes the Basic
+  token); connect/sync/push all inherit it, and a dead proxy fails
+  fast with the proxy named in the error.
+- Sync now pulls GET /users (edit_posts and up) as the authoritative
+  author list, feeding the default-author setting and the per-row
+  dropdown; local remarks survive the refresh.
+- Term selection in the detail panel is horizontal checkbox chips per
+  taxonomy, with a compact "new" input keeping the create-on-push
+  ability for names the registry does not have yet.
+- Settings moved into a real modal (Esc/backdrop close) with separate
+  Save and Test buttons; testing layers the typed values over the
+  stored settings without persisting them.
+
+Contract tests cover the proxy setting round-trip and the connect
+override semantics; runtime-verified against the live site (authors
+pulled, dead proxy 2s fail, cleared proxy reconnects).

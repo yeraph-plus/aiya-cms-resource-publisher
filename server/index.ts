@@ -33,16 +33,6 @@ function errorMessage(error: unknown): string {
     return String(error);
 }
 
-function creds() {
-    const settings = getSettings();
-    return { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword };
-}
-
-function hasCreds(): boolean {
-    const settings = getSettings();
-    return Boolean(settings.siteUrl && settings.username && settings.appPassword);
-}
-
     app.get("/api/state", async () => {
     const settings = getSettings();
     const grouped: Record<string, { id: number; name: string; slug: string }[]> = {};
@@ -63,6 +53,7 @@ function hasCreds(): boolean {
             siteUrl: settings.siteUrl,
             username: settings.username,
             hasPassword: settings.appPassword !== "",
+            proxyUrl: settings.proxyUrl,
             defaultAuthorId: settings.defaultAuthorId,
             lastSyncCursor: settings.lastSyncCursor,
         },
@@ -77,36 +68,53 @@ function hasCreds(): boolean {
 });
 
     app.put("/api/settings", async (request, reply) => {
-    const body = request.body as Record<string, unknown>;
-    if (body.siteUrl !== undefined) {
-        setSetting("siteUrl", normalizeSiteUrl(String(body.siteUrl ?? "")));
-    }
-    if (body.username !== undefined) {
-        setSetting("username", String(body.username ?? "").trim());
-    }
-    if (typeof body.appPassword === "string" && body.appPassword.trim() !== "") {
-        setSetting("appPassword", body.appPassword.trim());
-    }
-    if (body.defaultAuthorId !== undefined) {
-        setSetting("defaultAuthorId", body.defaultAuthorId === null ? null : String(body.defaultAuthorId));
-    }
-    return reply.code(200).send({ ok: true });
-});
-
-    app.post("/api/connect", async () => {
-    if (!hasCreds()) {
-        return { ok: false, error: "先填好站点地址、用户名和应用密码。" };
-    }
-    try {
-        const probe = await ping(creds());
-        if (!probe.resourceAvailable) {
-            return { ok: false, error: "站点上没有 resource 文章类型（aiya-core 未启用？）。" };
+        const body = request.body as Record<string, unknown>;
+        if (body.siteUrl !== undefined) {
+            setSetting("siteUrl", normalizeSiteUrl(String(body.siteUrl ?? "")));
         }
-        return { ok: true, ping: probe };
-    } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-    }
-});
+        if (body.username !== undefined) {
+            setSetting("username", String(body.username ?? "").trim());
+        }
+        if (typeof body.appPassword === "string" && body.appPassword.trim() !== "") {
+            setSetting("appPassword", body.appPassword.trim());
+        }
+        if (body.proxyUrl !== undefined) {
+            setSetting("proxyUrl", String(body.proxyUrl ?? "").trim());
+        }
+        if (body.defaultAuthorId !== undefined) {
+            setSetting("defaultAuthorId", body.defaultAuthorId === null ? null : String(body.defaultAuthorId));
+        }
+        return reply.code(200).send({ ok: true });
+    });
+
+    // The probe builds its credentials from the stored settings, then layers
+    // whatever the form currently holds on top — so "测试连接" tests the
+    // typed values without saving them.
+    app.post("/api/connect", async (request) => {
+        const body = (request.body ?? {}) as Record<string, unknown>;
+        const settings = getSettings();
+        const candidate = {
+            siteUrl: body.siteUrl !== undefined ? normalizeSiteUrl(String(body.siteUrl ?? "")) : settings.siteUrl,
+            username: body.username !== undefined ? String(body.username ?? "").trim() : settings.username,
+            appPassword:
+                typeof body.appPassword === "string" && body.appPassword.trim() !== ""
+                    ? body.appPassword.trim()
+                    : settings.appPassword,
+            proxyUrl: body.proxyUrl !== undefined ? String(body.proxyUrl ?? "").trim() : settings.proxyUrl,
+        };
+        if (!candidate.siteUrl || !candidate.username || !candidate.appPassword) {
+            return { ok: false, error: "先填好站点地址、用户名和应用密码。" };
+        }
+        try {
+            const probe = await ping(candidate);
+            if (!probe.resourceAvailable) {
+                return { ok: false, error: "站点上没有 resource 文章类型（aiya-core 未启用？）。" };
+            }
+            return { ok: true, ping: probe };
+        } catch (error) {
+            return { ok: false, error: errorMessage(error) };
+        }
+    });
 
     app.post("/api/posts", async (request) => {
     const body = (request.body ?? {}) as Record<string, unknown>;

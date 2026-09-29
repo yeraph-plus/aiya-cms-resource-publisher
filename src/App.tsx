@@ -167,7 +167,7 @@ export default function App() {
                     <option value="new">未推送新行</option>
                     <option value="missing">线上缺失</option>
                 </select>
-                <button className="btn" onClick={() => setSettingsOpen((open) => !open)}>
+                <button className="btn" onClick={() => setSettingsOpen(true)}>
                     设置
                 </button>
             </header>
@@ -175,6 +175,7 @@ export default function App() {
             {settingsOpen && (
                 <SettingsPanel
                     state={state}
+                    onClose={() => setSettingsOpen(false)}
                     onSaved={async (message) => {
                         notify(message.kind, message.text);
                         await refresh();

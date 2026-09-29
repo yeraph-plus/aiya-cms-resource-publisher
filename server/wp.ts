@@ -1,13 +1,17 @@
 /**
  * HTTP client for the site's aiya-publish/v1 namespace. Every call carries
  * the application password as Basic auth; failures surface as WpError with
- * the message WordPress sent.
+ * the message WordPress sent. An optional HTTP proxy (from the settings)
+ * applies to every outbound call via undici's ProxyAgent.
  */
+
+import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from "undici";
 
 export interface WpCreds {
     siteUrl: string;
     username: string;
     appPassword: string;
+    proxyUrl?: string;
 }
 
 export class WpError extends Error {
@@ -68,11 +72,29 @@ export function normalizeSiteUrl(raw: string): string {
     return url.replace(/\/+$/, "");
 }
 
+/** A proxy agent for the configured URL, or null when no proxy is set. */
+function proxyDispatcher(proxyUrl: string | undefined): Dispatcher | null {
+    const raw = (proxyUrl ?? "").trim();
+    if (raw === "") {
+        return null;
+    }
+    const parsed = new URL(raw);
+    const token =
+        parsed.username !== "" || parsed.password !== ""
+            ? `Basic ${Buffer.from(`${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`).toString("base64")}`
+            : undefined;
+    return new ProxyAgent({
+        uri: `${parsed.protocol}//${parsed.host}`,
+        token,
+    });
+}
+
 async function request<T>(creds: WpCreds, method: string, path: string, payload?: unknown): Promise<T> {
     const root = `${normalizeSiteUrl(creds.siteUrl)}/wp-json/aiya-publish/v1`;
+    const dispatcher = proxyDispatcher(creds.proxyUrl);
     let response: Response;
     try {
-        response = await fetch(root + path, {
+        response = await undiciFetch(root + path, {
             method,
             headers: {
                 Authorization: `Basic ${Buffer.from(`${creds.username}:${creds.appPassword}`).toString("base64")}`,
@@ -80,9 +102,11 @@ async function request<T>(creds: WpCreds, method: string, path: string, payload?
             },
             body: payload !== undefined ? JSON.stringify(payload) : undefined,
             signal: AbortSignal.timeout(30_000),
-        });
+            ...(dispatcher ? { dispatcher } : {}),
+        }) as unknown as Response;
     } catch (error) {
-        throw new WpError(0, "aiya_publish_unreachable", `无法连接站点：${String(error)}`);
+        const hint = dispatcher ? `（代理 ${creds.proxyUrl}）` : "";
+        throw new WpError(0, "aiya_publish_unreachable", `无法连接站点${hint}：${String(error)}`);
     }
 
     const text = await response.text();
@@ -110,6 +134,17 @@ export async function ping(creds: WpCreds): Promise<WpPing> {
 
 export async function taxonomies(creds: WpCreds): Promise<WpTaxonomy[]> {
     return request<WpTaxonomy[]>(creds, "GET", "/taxonomies");
+}
+
+export interface WpUser {
+    id: number;
+    login: string;
+    name: string;
+}
+
+/** Every account a post can be authored by (edit_posts and up). */
+export async function users(creds: WpCreds): Promise<WpUser[]> {
+    return request<WpUser[]>(creds, "GET", "/users");
 }
 
 /**

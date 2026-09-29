@@ -115,12 +115,12 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
         try {
             const item = row.postId
                 ? await updateResource(
-                      { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword },
+                      { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword, proxyUrl: settings.proxyUrl },
                       row.postId,
                       payload,
                   )
                 : await createResource(
-                      { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword },
+                      { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword, proxyUrl: settings.proxyUrl },
                       payload,
                   );
             applyResponse(row, item);

@@ -12,7 +12,7 @@ import {
     upsertAuthor,
     type PostRow,
 } from "./db.js";
-import { listResources, ping, taxonomies, WpError, type WpItem } from "./wp.js";
+import { listResources, ping, taxonomies, users, WpError, type WpItem } from "./wp.js";
 
 export interface SyncOutcome {
     ok: boolean;
@@ -26,7 +26,12 @@ export interface SyncOutcome {
 
 function creds() {
     const settings = getSettings();
-    return { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword };
+    return {
+        siteUrl: settings.siteUrl,
+        username: settings.username,
+        appPassword: settings.appPassword,
+        proxyUrl: settings.proxyUrl,
+    };
 }
 
 function message(error: unknown): string {
@@ -156,6 +161,12 @@ export async function runSync(): Promise<SyncOutcome> {
     }
 
     try {
+        // The authoritative author list: everyone who can author a post
+        // online. Local remarks survive; ids/names refresh from the site.
+        for (const user of await users(site)) {
+            upsertAuthor(user.id, user.name);
+        }
+
         replaceTerms(await taxonomies(site));
 
         const cursor = settings.lastSyncCursor;

@@ -71,6 +71,7 @@ export interface SettingsShape {
     siteUrl: string;
     username: string;
     appPassword: string;
+    proxyUrl: string;
     defaultAuthorId: number | null;
     lastSyncCursor: string | null;
 }
@@ -80,6 +81,7 @@ export function getSettings(): SettingsShape {
         siteUrl: getSetting("siteUrl") ?? "",
         username: getSetting("username") ?? "",
         appPassword: getSetting("appPassword") ?? "",
+        proxyUrl: getSetting("proxyUrl") ?? "",
         defaultAuthorId: getSetting("defaultAuthorId") ? Number(getSetting("defaultAuthorId")) : null,
         lastSyncCursor: getSetting("lastSyncCursor"),
     };

@@ -104,18 +104,21 @@ export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, 
         [state.terms],
     );
 
+    const addRef = (taxonomy: string, ref: string) => {
+        const current = draft.terms[taxonomy] ?? [];
+        if (current.includes(ref)) {
+            return;
+        }
+        update({ terms: { ...draft.terms, [taxonomy]: [...current, ref] } });
+    };
+
     const addTerm = (taxonomy: string, raw: string) => {
         const name = raw.trim();
         if (name === "") {
             return;
         }
         const existing = termOptions(taxonomy).find((option) => option.name.toLowerCase() === name.toLowerCase());
-        const ref = existing ? String(existing.id) : `name:${name}`;
-        const current = draft.terms[taxonomy] ?? [];
-        if (current.includes(ref)) {
-            return;
-        }
-        update({ terms: { ...draft.terms, [taxonomy]: [...current, ref] } });
+        addRef(taxonomy, existing ? String(existing.id) : `name:${name}`);
     };
 
     const removeTerm = (taxonomy: string, ref: string) => {
@@ -191,42 +194,60 @@ export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, 
 
             {TAXONOMY_ORDER.map((taxonomy) => {
                 const options = termOptions(taxonomy);
-                if (taxonomy !== "resource_category" && options.length === 0 && !(draft.terms[taxonomy] ?? []).length) {
+                const selected = draft.terms[taxonomy] ?? [];
+                if (taxonomy !== "resource_category" && options.length === 0 && selected.length === 0) {
                     return null;
                 }
                 return (
                     <div key={taxonomy}>
                         <span className="lbl">{TAXONOMY_LABELS[taxonomy] ?? taxonomy}</span>
-                        <div className="flex flex-wrap gap-1 mb-1">
-                            {(draft.terms[taxonomy] ?? []).map((ref) => (
-                                <span key={ref} className="chip">
-                                    {refLabel(taxonomy, ref)}
-                                    <button
-                                        className="ml-1 text-neutral-400 hover:text-red-500"
-                                        onClick={() => removeTerm(taxonomy, ref)}
-                                    >
-                                        ×
-                                    </button>
-                                </span>
-                            ))}
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 mb-1">
+                            {options.map((option) => {
+                                const ref = String(option.id);
+                                return (
+                                    <label key={ref} className="inline-flex items-center gap-1 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={selected.includes(ref)}
+                                            onChange={(event) => {
+                                                if (event.target.checked) {
+                                                    addRef(taxonomy, ref);
+                                                } else {
+                                                    removeTerm(taxonomy, ref);
+                                                }
+                                            }}
+                                        />
+                                        <span>{option.name}</span>
+                                    </label>
+                                );
+                            })}
+                            {/* Selected refs missing from the term registry stay
+                                visible and removable: not-yet-created names. */}
+                            {selected
+                                .filter((ref) => ref.startsWith("name:") || !options.some((option) => String(option.id) === ref))
+                                .map((ref) => (
+                                    <span key={ref} className="chip">
+                                        {refLabel(taxonomy, ref)}
+                                        <button
+                                            className="ml-1 text-neutral-400 hover:text-red-500"
+                                            onClick={() => removeTerm(taxonomy, ref)}
+                                        >
+                                            ×
+                                        </button>
+                                    </span>
+                                ))}
+                            <input
+                                className="w-32 text-xs"
+                                placeholder="＋新建"
+                                onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                        event.preventDefault();
+                                        addTerm(taxonomy, event.currentTarget.value);
+                                        event.currentTarget.value = "";
+                                    }
+                                }}
+                            />
                         </div>
-                        <input
-                            list={`terms-${taxonomy}`}
-                            className="w-full"
-                            placeholder="输入名称回车添加（存在的用词库项，不存在的新建）"
-                            onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                    event.preventDefault();
-                                    addTerm(taxonomy, event.currentTarget.value);
-                                    event.currentTarget.value = "";
-                                }
-                            }}
-                        />
-                        <datalist id={`terms-${taxonomy}`}>
-                            {options.map((option) => (
-                                <option key={option.id} value={option.name} />
-                            ))}
-                        </datalist>
                     </div>
                 );
             })}

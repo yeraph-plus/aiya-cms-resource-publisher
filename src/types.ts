@@ -4,6 +4,7 @@ export interface SettingsDTO {
     siteUrl: string;
     username: string;
     hasPassword: boolean;
+    proxyUrl: string;
     defaultAuthorId: number | null;
     lastSyncCursor: string | null;
 }

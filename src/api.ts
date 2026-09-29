@@ -54,11 +54,16 @@ export interface SaveSettingsPayload {
     siteUrl?: string;
     username?: string;
     appPassword?: string;
+    proxyUrl?: string;
     defaultAuthorId?: number | null;
 }
 
 export function saveSettings(payload: SaveSettingsPayload): Promise<{ ok: boolean }> {
     return call<{ ok: boolean }>("/api/settings", "PUT", payload);
+}
+
+export interface ConnectPayload extends SaveSettingsPayload {
+    /** The password field is only sent when the user typed one. */
 }
 
 export interface ConnectResult {
@@ -67,8 +72,9 @@ export interface ConnectResult {
     ping?: { user: { login: string; name: string }; caps: Record<string, boolean>; version: string };
 }
 
-export function connect(): Promise<ConnectResult> {
-    return call<ConnectResult>("/api/connect", "POST", {});
+/** Probes the site with the typed values layered over the stored settings. */
+export function connect(payload: ConnectPayload = {}): Promise<ConnectResult> {
+    return call<ConnectResult>("/api/connect", "POST", payload);
 }
 
 export interface SyncOutcomeDTO {

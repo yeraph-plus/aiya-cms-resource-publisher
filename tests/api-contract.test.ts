@@ -28,13 +28,31 @@ describe("local api contract", () => {
         const res = await app.inject({
             method: "PUT",
             url: "/api/settings",
-            payload: { siteUrl: "http://localhost:8000", username: "u", appPassword: "p" },
+            payload: { siteUrl: "http://localhost:8000", username: "u", appPassword: "p", proxyUrl: "http://127.0.0.1:7890" },
         });
         expect(res.statusCode).toBe(200);
         expect(res.json()).toEqual({ ok: true });
 
         const state = await app.inject({ method: "GET", url: "/api/state" });
         expect(state.json().settings.siteUrl).toBe("http://localhost:8000");
+        expect(state.json().settings.proxyUrl).toBe("http://127.0.0.1:7890");
+    });
+
+    it("connect layers the typed payload over the stored settings without saving", async () => {
+        // Stored: user "u"; the form overrides it — the probe uses the typed
+        // value and the stored proxy, and persists nothing.
+        const res = await app.inject({
+            method: "POST",
+            url: "/api/connect",
+            payload: { username: "typed-user" },
+        });
+        expect(res.statusCode).toBe(200);
+        // Unreachable site + bogus proxy both surface as ok:false with a message.
+        expect(res.json().ok).toBe(false);
+        expect(typeof res.json().error).toBe("string");
+
+        const state = await app.inject({ method: "GET", url: "/api/state" });
+        expect(state.json().settings.username).toBe("u");
     });
 
     it("rejects the wrong verb with the diagnostic 404", async () => {
