@@ -1,0 +1,24 @@
+includes:
+    - vendor/szepeviktor/phpstan-wordpress/extension.neon
+
+parameters:
+    level: 8
+
+    # Analysis target: the runtime PHP (plugin header "Requires PHP: 8.5").
+    # The composer constraint also admits 8.4, and PHPCompatibility checks
+    # that lower bound — see testVersion in phpcs.xml.dist.
+    phpVersion: 80500
+
+    paths:
+        - aiya-publish.php
+        - src
+
+    excludePaths:
+        analyse:
+            - */vendor/*
+
+    bootstrapFiles:
+        - vendor/szepeviktor/phpstan-wordpress/bootstrap.php
+
+    inferPrivatePropertyTypeFromConstructor: true
+    treatPhpDocTypesAsCertain: false
