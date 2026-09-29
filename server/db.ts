@@ -5,7 +5,8 @@ import { mkdirSync } from "node:fs";
 const dataDir = process.env.PUBLISHER_DATA ?? process.cwd();
 mkdirSync(dataDir, { recursive: true });
 
-export const db = new Database(join(dataDir, "publisher.db"));
+export const dbPath = join(dataDir, "publisher.db");
+export const db = new Database(dbPath);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 

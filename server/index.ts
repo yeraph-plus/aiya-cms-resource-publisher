@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import {
+    dbPath,
     deletePost,
     getPost,
     getSettings,
@@ -237,14 +238,31 @@ if (existsSync(distDir)) {
     await app.register(fastifyStatic, { root: distDir });
     app.setNotFoundHandler(async (request, reply) => {
         if (request.url.startsWith("/api/")) {
-            return reply.code(404).send({ error: "not found" });
+            return reply.code(404).send({ error: `not found: ${request.method} ${request.url}` });
         }
         return reply.type("text/html").sendFile("index.html");
     });
 }
 
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    // tsx watch restarts the child with SIGTERM; closing the listener here
+    // frees the port before exit, or the next start dies on EADDRINUSE.
+    process.on(signal, () => {
+        app.close().finally(() => process.exit(0));
+    });
+}
+
 app.listen({ port: PORT, host: "127.0.0.1" }).then(() => {
     console.log(`AIYA Publisher listening on http://localhost:${PORT}`);
+    console.log(`db: ${dbPath}`);
+}).catch((error) => {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EADDRINUSE") {
+        console.error(`端口 ${PORT} 已被占用——旧的发帖器实例还在运行，先结束它再启动。`);
+    } else {
+        console.error(error);
+    }
+    process.exit(1);
 });
 
 export { app };

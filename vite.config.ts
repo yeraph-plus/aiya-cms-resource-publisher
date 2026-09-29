@@ -7,7 +7,9 @@ export default defineConfig({
     server: {
         port: 5173,
         proxy: {
-            "/api": "http://localhost:5175",
+            // 127.0.0.1, not localhost: the API server binds IPv4 only, and a
+            // localhost target can resolve to ::1 first on Windows.
+            "/api": "http://127.0.0.1:5175",
         },
     },
 });
