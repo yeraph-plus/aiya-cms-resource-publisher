@@ -309,12 +309,6 @@ export function listTerms(): { taxonomy: string; id: number; name: string; slug:
         .all() as { taxonomy: string; id: number; name: string; slug: string }[];
 }
 
-export function listTaxonomySlugs(): string[] {
-    return (db.prepare("SELECT DISTINCT taxonomy FROM terms").all() as { taxonomy: string }[]).map(
-        (row) => row.taxonomy,
-    );
-}
-
 export function upsertAuthor(id: number, name: string): void {
     if (!Number.isInteger(id) || id <= 0) {
         return;
@@ -332,10 +326,6 @@ export interface AuthorRow {
 
 export function listAuthors(): AuthorRow[] {
     return db.prepare("SELECT id, name, remark FROM authors ORDER BY name").all() as AuthorRow[];
-}
-
-export function saveAuthorRemark(id: number, remark: string): void {
-    db.prepare("UPDATE authors SET remark = ? WHERE id = ?").run(remark, id);
 }
 
 /** What a row looked like when the server last confirmed it — the revert base and the conflict yardstick. */

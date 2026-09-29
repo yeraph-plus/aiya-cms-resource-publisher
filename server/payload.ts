@@ -1,5 +1,16 @@
-import { parseSnapshot, type PostRow, type Snapshot } from "./db.js";
+import type { PostRow, Snapshot } from "./db.js";
 import type { PushPayload, PushTermRef } from "./wp.js";
+
+function parseSnapshot(raw: string | null): Snapshot | null {
+    if (!raw) {
+        return null;
+    }
+    try {
+        return JSON.parse(raw) as Snapshot;
+    } catch {
+        return null;
+    }
+}
 
 function refsToPayload(refs: Record<string, string[]>): Record<string, PushTermRef[]> {
     const payload: Record<string, PushTermRef[]> = {};
@@ -19,7 +30,7 @@ function refsToPayload(refs: Record<string, string[]>): Record<string, PushTermR
  * backdated it to).
  */
 export function buildPayload(row: PostRow, termRefs: Record<string, string[]>): PushPayload {
-    const snapshot: Snapshot | null = parseSnapshot(row.snapshot);
+    const snapshot = parseSnapshot(row.snapshot);
     const payload: PushPayload = {
         title: row.title,
         content: row.content,

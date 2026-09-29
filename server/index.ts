@@ -6,7 +6,6 @@ import { existsSync } from "node:fs";
 import {
     deletePost,
     getPost,
-    getPostByRemoteId,
     getSettings,
     getTermRefs,
     insertPost,
@@ -14,11 +13,9 @@ import {
     listPosts,
     listTerms,
     parseSnapshot,
-    saveAuthorRemark,
     setSetting,
     setTermRefs,
     updatePostRow,
-    type Snapshot,
 } from "./db.js";
 import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
@@ -93,9 +90,6 @@ app.put("/api/settings", async (request, reply) => {
     if (body.defaultAuthorId !== undefined) {
         setSetting("defaultAuthorId", body.defaultAuthorId === null ? null : String(body.defaultAuthorId));
     }
-    if (typeof body.defaultAuthorRemark === "string" && typeof body.defaultAuthorId === "number") {
-        saveAuthorRemark(body.defaultAuthorId, body.defaultAuthorRemark);
-    }
     return reply.code(200).send({ ok: true });
 });
 
@@ -135,11 +129,19 @@ app.put("/api/posts/:id", async (request, reply) => {
     }
     const body = request.body as Record<string, unknown>;
 
+    // fileserve: null = the tool has no data for this row (leave the online
+    // meta alone); an object — even an empty one — is the row's whole config,
+    // so {} means "clear the online file lists on push".
     const { config, errors } = normalizeConfig(body.fileserve ?? null);
     if (errors.length > 0) {
         return reply.code(400).send({ error: errors.join(" ") });
     }
-    const fileserve = Object.keys(config).length > 0 ? JSON.stringify(config) : null;
+    const providesFileserve = body.fileserve !== null && body.fileserve !== undefined;
+    const fileserve = providesFileserve
+        ? Object.keys(config).length > 0
+            ? JSON.stringify(config)
+            : "{}"
+        : row.fileserve;
 
     const next = {
         status: String(body.status ?? row.status),
@@ -149,9 +151,21 @@ app.put("/api/posts/:id", async (request, reply) => {
         dateLocal: String(body.dateLocal ?? row.dateLocal),
         fileserve,
     };
-    if (!["publish", "draft"].includes(next.status)) {
-        return reply.code(400).send({ error: "状态只能是 publish 或 draft。" });
+    if (!["publish", "draft", "future"].includes(next.status)) {
+        return reply.code(400).send({ error: "状态只能是 publish、draft 或 future。" });
     }
+
+    // Terms ride along only when the client sent them: partial patches (a
+    // grid cell edit) must not wipe the row's term references.
+    const nextTerms = body.terms !== null && body.terms !== undefined && typeof body.terms === "object"
+        ? (body.terms as Record<string, string[]>)
+        : null;
+    const canonicalRefs = (refs: Record<string, string[]>): string =>
+        Object.entries(refs)
+            .map(([taxonomy, list]) => `${taxonomy}:${[...list].sort().join(",")}`)
+            .sort()
+            .join("|");
+    const termsChanged = nextTerms !== null && canonicalRefs(nextTerms) !== canonicalRefs(getTermRefs(localId));
 
     const changed =
         next.status !== row.status ||
@@ -159,10 +173,13 @@ app.put("/api/posts/:id", async (request, reply) => {
         next.content !== row.content ||
         next.authorId !== row.authorId ||
         next.dateLocal !== row.dateLocal ||
-        next.fileserve !== row.fileserve;
+        next.fileserve !== row.fileserve ||
+        termsChanged;
 
     updatePostRow(localId, { ...next, dirty: changed ? true : row.dirty });
-    setTermRefs(localId, (body.terms ?? {}) as Record<string, string[]>);
+    if (nextTerms !== null) {
+        setTermRefs(localId, nextTerms);
+    }
 
     const saved = getPost(localId);
     return {

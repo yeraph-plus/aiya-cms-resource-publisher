@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RowDTO, StateDTO } from "../types";
 import { TAXONOMY_LABELS, TAXONOMY_ORDER } from "../types";
-import type { RowPatch } from "../api";
+import { saveRow, type RowPatch } from "../api";
 import FileServeEditor from "./FileServeEditor";
 import { normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
 
@@ -21,10 +21,6 @@ function toInput(value: string): string {
     return value === "" ? "" : value.slice(0, 16);
 }
 
-function fromInput(value: string): string {
-    return value === "" ? "" : `${value}:00`;
-}
-
 interface Draft {
     status: string;
     title: string;
@@ -36,15 +32,18 @@ interface Draft {
 }
 
 export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, onDelete, notify }: Props) {
-    const [draft, setDraft] = useState<Draft>(() => ({
-        status: row.status,
-        title: row.title,
-        content: row.content,
-        authorId: row.authorId,
-        dateLocal: toInput(row.dateLocal),
-        terms: row.terms,
-        fileserve: (row.fileserveParsed ?? null) as FileServeConfig | null,
-    }));
+    const draftFromRow = (source: RowDTO): Draft => ({
+        status: source.status,
+        title: source.title,
+        content: source.content,
+        authorId: source.authorId,
+        dateLocal: toInput(source.dateLocal),
+        terms: source.terms,
+        fileserve: (source.fileserveParsed ?? null) as FileServeConfig | null,
+    });
+    const [draft, setDraft] = useState<Draft>(() => draftFromRow(row));
+    const draftRef = useRef(draft);
+    const saving = useRef(false);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -55,11 +54,23 @@ export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, 
         };
     }, []);
 
+    // While no local edit is in flight, adopt what the server round-trip
+    // brought back — a grid-cell edit on this same row must not be clobbered
+    // by a stale panel draft.
+    useEffect(() => {
+        if (!saving.current) {
+            const next = draftFromRow(row);
+            draftRef.current = next;
+            setDraft(next);
+        }
+    }, [row]);
+
     const save = (next: Draft) => {
         if (timer.current) {
             clearTimeout(timer.current);
         }
         timer.current = setTimeout(async () => {
+            saving.current = true;
             try {
                 const { config } = normalizeConfig(next.fileserve);
                 const payload: RowPatch = {
@@ -71,20 +82,21 @@ export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, 
                     terms: next.terms,
                     fileserve: Object.keys(config).length > 0 ? config : next.fileserve === null ? null : {},
                 };
-                await import("../api").then((api) => api.saveRow(row.localId, payload));
+                await saveRow(row.localId, payload);
                 onEdit();
             } catch (error) {
                 notify("err", `保存失败：${String(error)}`);
+            } finally {
+                saving.current = false;
             }
         }, 600);
     };
 
     const update = (patch: Partial<Draft>) => {
-        setDraft((previous) => {
-            const next = { ...previous, ...patch };
-            save(next);
-            return next;
-        });
+        const next = { ...draftRef.current, ...patch };
+        draftRef.current = next;
+        setDraft(next);
+        save(next);
     };
 
     const termOptions = useMemo(
@@ -147,6 +159,7 @@ export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, 
                     <select className="w-full" value={draft.status} onChange={(event) => update({ status: event.target.value })}>
                         <option value="publish">publish</option>
                         <option value="draft">draft</option>
+                        <option value="future">future（站点按日期定时）</option>
                     </select>
                 </label>
                 <label className="block">
