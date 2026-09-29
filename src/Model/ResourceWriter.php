@@ -32,7 +32,7 @@ final class ResourceWriter
         if ($status instanceof WP_Error) {
             return $status;
         }
-        if ($status === 'publish' && !current_user_can('publish_posts')) {
+        if (in_array($status, ['publish', 'future'], true) && !current_user_can('publish_posts')) {
             return self::forbiddenPublish();
         }
         $authorId = Payload::authorId($payload['authorId'] ?? null);
@@ -116,7 +116,7 @@ final class ResourceWriter
             if ($status instanceof WP_Error) {
                 return $status;
             }
-            if ($status === 'publish' && !current_user_can('publish_posts')) {
+            if (in_array($status, ['publish', 'future'], true) && !current_user_can('publish_posts')) {
                 return self::forbiddenPublish();
             }
             $args['post_status'] = $status;

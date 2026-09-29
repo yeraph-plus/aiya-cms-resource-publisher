@@ -37,12 +37,14 @@ final class PayloadTest extends TestCase
         self::assertSame('', Payload::content(null));
     }
 
-    public function testStatusDefaultsToPublishAndAcceptsBothValues(): void
+    public function testStatusDefaultsToPublishAndAcceptsAllValues(): void
     {
         self::assertSame('publish', Payload::status(null));
         self::assertSame('publish', Payload::status(''));
         self::assertSame('draft', Payload::status('draft'));
         self::assertSame('publish', Payload::status('publish'));
+        // A scheduled post echoes back through the tool without a 400.
+        self::assertSame('future', Payload::status('future'));
         self::assertInstanceOf(WP_Error::class, Payload::status('private'));
     }
 

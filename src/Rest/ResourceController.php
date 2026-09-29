@@ -125,7 +125,8 @@ final class ResourceController
         $perPage = min(100, max(1, (int) $request->get_param('per_page')));
         $queryArgs = [
             'post_type' => 'resource',
-            'post_status' => ['publish', 'draft'],
+            // 'future' rides along so a scheduled post survives the sync.
+            'post_status' => ['publish', 'draft', 'future'],
             'posts_per_page' => $perPage,
             'paged' => max(1, (int) $request->get_param('page')),
             'orderby' => 'ID',

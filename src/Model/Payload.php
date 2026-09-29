@@ -13,7 +13,12 @@ use WP_Error;
  */
 final class Payload
 {
-    public const STATUSES = ['publish', 'draft'];
+    /**
+     * 'future' is accepted so a scheduled post echoes back through the tool
+     * without a spurious 400; WordPress itself assigns it when a publish
+     * request carries a future date.
+     */
+    public const STATUSES = ['publish', 'draft', 'future'];
 
     public static function title(mixed $value): string|WP_Error
     {
