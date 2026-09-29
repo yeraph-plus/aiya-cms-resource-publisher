@@ -5,7 +5,6 @@
  * Version: 0.1.0
  * Requires at least: 6.5
  * Requires PHP: 8.5
- * Requires Plugins: aiya-core
  * Author: Yeraph
  * License: GPL-3.0-or-later
  * Update URI: false
