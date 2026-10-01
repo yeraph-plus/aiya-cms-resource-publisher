@@ -5,6 +5,7 @@ import {
     emptyGroup,
     nextId,
     normalizeConfig,
+    priceDefault,
     sanitizeId,
 } from "../shared/fileserve.js";
 
@@ -96,7 +97,21 @@ describe("fileserve model", () => {
     it("builds an empty group for the editor with every declared field", () => {
         const group = emptyGroup("openlist_search");
         expect(ADAPTER_FIELDS.openlist_search!.map((field) => field.id)).toContain("keywords");
-        expect(group).toMatchObject({ adapter: "openlist_search", keywords: "", parent: "", password: "", per_page: 0, title: "", price: 0 });
+        expect(group).toMatchObject({ adapter: "openlist_search", keywords: "", parent: "", password: "", per_page: 0, title: "", price: 10 });
+    });
+
+    it("pre-fills the suggested price per adapter (pan links 2, everything else 10)", () => {
+        expect(priceDefault("platform")).toBe(2);
+        expect(priceDefault("openlist_list")).toBe(10);
+        expect(priceDefault("openlist_search")).toBe(10);
+        expect(priceDefault("gofile_api")).toBe(10);
+        expect(priceDefault("unknown_adapter")).toBe(10);
+        expect(emptyGroup("platform").price).toBe(2);
+    });
+
+    it("still normalizes site snapshots without a price to 0, unlike the editor prefill", () => {
+        const { config } = normalizeConfig({ "1": { adapter: "platform", url: "https://x" } });
+        expect(config["1"]?.price).toBe(0);
     });
 
     it("summarizes a config for the grid column", () => {

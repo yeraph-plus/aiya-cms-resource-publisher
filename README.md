@@ -60,7 +60,7 @@ npm test        # vitest：fileserve 模型与推送载荷构建
 
 WP 侧配套插件（AIYA CMS - Resource Post Publisher）随本仓库单仓库维护，源码在 `wordpress_plugins/aiya-cms-resource-publisher/`（REST 命名空间 `aiya-publish/v1`，端点语义见其 `README.md`）。
 
-- 插件头声明 **`Requires Plugins: aiya-core`**（core 插件的部署 slug）：未安装/未启用时 WordPress 拒绝激活（resource 类型由 core 注册）；CLI 等旁路激活时入口文件还有运行时兜底——显示管理提示且不注册任何路由。
+- 不声明 `Requires Plugins` 头（该头按目录 slug 匹配依赖，core 插件本地 slug `aiya-core`、线上 `aiya-cms-core`，无法统一）：未安装/未启用 core 时入口文件运行时兜底——显示管理提示且不注册任何路由（resource 类型由 core 注册）。
 - **部署**：`npm run plugin:sync` 把源码镜像到 `../wp-content/plugins/aiya-cms-publish`（跳过 `.git`/`vendor`；目标侧 `vendor/` 是容器内 QA 工具，装一次即可，不同步）。开发循环：改 `wordpress_plugins/aiya-cms-resource-publisher` → `npm run plugin:sync` → 容器内检查（见插件 README）。
 - **发布包**：`npm run plugin:archive` 产出 `archives/aiya-cms-publish-<版本>.zip`（WP 安装器可直接上传；zip 内顶层目录为部署 slug，tests/QA 配置/composer 文件已剔除）。
 - 该插件历史上是独立 git 仓库，已 subtree 并入本仓库（提交历史保留）。

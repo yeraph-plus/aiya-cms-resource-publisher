@@ -16,6 +16,7 @@ import {
 } from "./wp.js";
 import { buildPayload } from "./payload.js";
 import { normalizeConfig } from "../shared/fileserve.js";
+import { setProgress } from "./progress.js";
 
 export interface PushError {
     localId: number;
@@ -101,7 +102,8 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
         return outcome;
     }
 
-    for (const row of rows) {
+    for (const [index, row] of rows.entries()) {
+        setProgress({ phase: `推送：${row.title.slice(0, 16) || `#${row.localId}`}`, done: index, total: rows.length });
         const { config, errors } = normalizeConfig(row.fileserve ?? null);
         if (errors.length > 0) {
             outcome.failed += 1;

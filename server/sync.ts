@@ -13,6 +13,7 @@ import {
     type PostRow,
 } from "./db.js";
 import { listResources, ping, taxonomies, users, WpError, type WpItem } from "./wp.js";
+import { setProgress } from "./progress.js";
 
 export interface SyncOutcome {
     ok: boolean;
@@ -150,6 +151,7 @@ export async function runSync(): Promise<SyncOutcome> {
     const site = creds();
     let probe;
     try {
+        setProgress({ phase: "连接站点", done: 0, total: 0 });
         probe = await ping(site);
     } catch (error) {
         outcome.error = message(error);
@@ -163,10 +165,12 @@ export async function runSync(): Promise<SyncOutcome> {
     try {
         // The authoritative author list: everyone who can author a post
         // online. Local remarks survive; ids/names refresh from the site.
+        setProgress({ phase: "拉取作者", done: 0, total: 0 });
         for (const user of await users(site)) {
             upsertAuthor(user.id, user.name);
         }
 
+        setProgress({ phase: "拉取术语", done: 0, total: 0 });
         replaceTerms(await taxonomies(site));
 
         const cursor = settings.lastSyncCursor;
@@ -175,9 +179,14 @@ export async function runSync(): Promise<SyncOutcome> {
         let page = 1;
         const seen = new Set<number>();
         let maxModified = cursor ?? "";
+        const box: { total: number | null } = { total: null };
 
         for (;;) {
-            const items = await listResources(site, page, perPage, incremental ? (cursor ?? undefined) : undefined);
+            const { items, total } = await listResources(site, page, perPage, incremental ? (cursor ?? undefined) : undefined);
+            if (box.total === null && total !== null) {
+                box.total = total;
+            }
+            setProgress({ phase: "拉取资源", done: outcome.fetched, total: box.total ?? 0 });
             for (const item of items) {
                 // A row the publisher itself pushed a moment ago can come
                 // back mid-sync; merging it is harmless — dirty rows keep
@@ -189,6 +198,7 @@ export async function runSync(): Promise<SyncOutcome> {
                 }
             }
             outcome.fetched += items.length;
+            setProgress({ phase: "拉取资源", done: outcome.fetched, total: box.total ?? outcome.fetched });
             if (items.length < perPage) {
                 break;
             }
@@ -196,6 +206,7 @@ export async function runSync(): Promise<SyncOutcome> {
         }
 
         if (!incremental) {
+            setProgress({ phase: "核对缺失", done: 0, total: 0 });
             for (const row of listPosts()) {
                 const gone = row.postId !== null && !seen.has(row.postId);
                 if (gone !== row.missing) {
@@ -208,7 +219,18 @@ export async function runSync(): Promise<SyncOutcome> {
         }
 
         if (maxModified !== "") {
-            setSetting("lastSyncCursor", maxModified);
+            // WP datetimes are second-granular and modified_after compares
+            // strictly, so posts modified within the same second as the
+            // cursor could be skipped by the next pull. Step the cursor back
+            // one second — re-merging an already-seen row is harmless.
+            const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(maxModified);
+            if (m) {
+                const boundary = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6])));
+                boundary.setUTCSeconds(boundary.getUTCSeconds() - 1);
+                setSetting("lastSyncCursor", boundary.toISOString().slice(0, 19));
+            } else {
+                setSetting("lastSyncCursor", maxModified);
+            }
         }
         outcome.ok = true;
         return outcome;

@@ -72,24 +72,46 @@ export function normalizeSiteUrl(raw: string): string {
     return url.replace(/\/+$/, "");
 }
 
-/** A proxy agent for the configured URL, or null when no proxy is set. */
+/** One agent per proxy endpoint, reused across requests — a fresh ProxyAgent
+ * per call would open a new connection pool every time and never close it. */
+const proxyAgents = new Map<string, ProxyAgent>();
+
+/**
+ * A proxy agent for the configured URL, or null when no proxy is set.
+ * Accepts scheme-less "127.0.0.1:10808" like the site URL does. Only HTTP(S)
+ * proxies: undici's ProxyAgent cannot speak SOCKS — a socks:// URL is a
+ * configuration error and answers as one.
+ */
 function proxyDispatcher(proxyUrl: string | undefined): Dispatcher | null {
-    const raw = (proxyUrl ?? "").trim();
+    let raw = (proxyUrl ?? "").trim();
     if (raw === "") {
         return null;
     }
+    if (!/^https?:\/\//i.test(raw)) {
+        raw = `http://${raw}`;
+    }
     const parsed = new URL(raw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new WpError(
+            0,
+            "aiya_publish_proxy_invalid",
+            `代理仅支持 http(s)://，不支持 ${parsed.protocol}（SOCKS 需在代理客户端开 HTTP/mixed 端口）：${proxyUrl}`,
+        );
+    }
     const token =
         parsed.username !== "" || parsed.password !== ""
             ? `Basic ${Buffer.from(`${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`).toString("base64")}`
             : undefined;
-    return new ProxyAgent({
-        uri: `${parsed.protocol}//${parsed.host}`,
-        token,
-    });
+    const key = `${parsed.protocol}//${parsed.host}|${token ?? ""}`;
+    let agent = proxyAgents.get(key);
+    if (!agent) {
+        agent = new ProxyAgent({ uri: `${parsed.protocol}//${parsed.host}`, token });
+        proxyAgents.set(key, agent);
+    }
+    return agent;
 }
 
-async function request<T>(creds: WpCreds, method: string, path: string, payload?: unknown): Promise<T> {
+async function request<T>(creds: WpCreds, method: string, path: string, payload?: unknown, capture?: (response: Response) => void): Promise<T> {
     const root = `${normalizeSiteUrl(creds.siteUrl)}/wp-json/aiya-publish/v1`;
     const dispatcher = proxyDispatcher(creds.proxyUrl);
     let response: Response;
@@ -108,6 +130,7 @@ async function request<T>(creds: WpCreds, method: string, path: string, payload?
         const hint = dispatcher ? `（代理 ${creds.proxyUrl}）` : "";
         throw new WpError(0, "aiya_publish_unreachable", `无法连接站点${hint}：${String(error)}`);
     }
+    capture?.(response);
 
     const text = await response.text();
     let body: unknown = null;
@@ -119,10 +142,16 @@ async function request<T>(creds: WpCreds, method: string, path: string, payload?
 
     if (!response.ok) {
         const shaped = body as { code?: string; message?: string } | null;
+        // Cloudflare answers its bot challenge with an HTML page and no REST
+        // error at all — name it, or the tool would show a bare "HTTP 403".
+        const challenged = response.headers.get("cf-mitigated") === "challenge";
         throw new WpError(
             response.status,
             shaped?.code ?? "aiya_publish_http_error",
-            shaped?.message ?? `HTTP ${response.status}`,
+            shaped?.message ??
+                (challenged
+                    ? "Cloudflare 人机验证拦截（响应是挑战页而非站点应答）：需在 Cloudflare 为 /wp-json/ 路径配置跳过挑战的 WAF 规则。"
+                    : `HTTP ${response.status}`),
         );
     }
     return body as T;
@@ -147,19 +176,31 @@ export async function users(creds: WpCreds): Promise<WpUser[]> {
     return request<WpUser[]>(creds, "GET", "/users");
 }
 
+export interface ResourcePage {
+    items: WpItem[];
+    /** X-WP-Total of the queried list, when the site reports it. */
+    total: number | null;
+}
+
 /**
  * One page of the resource list. The endpoint answers a bare array; the
  * caller pages until a short page — an exact multiple of the page size costs
- * one extra empty request, nothing more.
+ * one extra empty request, nothing more. The X-WP-Total header feeds the
+ * pull progress bar.
  */
-export async function listResources(creds: WpCreds, page: number, perPage: number, modifiedAfter?: string): Promise<WpItem[]> {
+export async function listResources(creds: WpCreds, page: number, perPage: number, modifiedAfter?: string): Promise<ResourcePage> {
     const params = new URLSearchParams();
     params.set("page", String(page));
     params.set("per_page", String(perPage));
     if (modifiedAfter) {
         params.set("modified_after", modifiedAfter);
     }
-    return request<WpItem[]>(creds, "GET", `/resource?${params.toString()}`);
+    const box: { total: number | null } = { total: null };
+    const items = await request<WpItem[]>(creds, "GET", `/resource?${params.toString()}`, undefined, (response) => {
+        const header = Number(response.headers.get("x-wp-total"));
+        box.total = Number.isFinite(header) && header > 0 ? header : null;
+    });
+    return { items, total: box.total };
 }
 
 /** A term reference as the push payload expects: numeric id or a bare name. */

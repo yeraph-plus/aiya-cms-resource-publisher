@@ -2,17 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { RowDTO, StateDTO } from "../types";
 import { TAXONOMY_LABELS, TAXONOMY_ORDER } from "../types";
 import { saveRow, type RowPatch } from "../api";
+import { mergeTermTokens, splitTermInput } from "../../shared/terms";
 import FileServeEditor from "./FileServeEditor";
 import { normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
 
 interface Props {
     row: RowDTO;
     state: StateDTO;
-    busy: boolean;
     onEdit: () => void;
-    onPushRow: () => void;
-    onRevert: () => void;
-    onDelete: () => void;
     notify: (kind: "ok" | "err", text: string) => void;
 }
 
@@ -31,7 +28,7 @@ interface Draft {
     fileserve: FileServeConfig | null;
 }
 
-export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, onDelete, notify }: Props) {
+export default function Detail({ row, state, onEdit, notify }: Props) {
     const draftFromRow = (source: RowDTO): Draft => ({
         status: source.status,
         title: source.title,
@@ -46,12 +43,41 @@ export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, 
     const saving = useRef(false);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // Writes the draft to the local store. Called by the debounce below and
+    // once more from the unmount flush — switching rows must not discard an
+    // edit that has not had its 600ms yet.
+    const persist = async (next: Draft): Promise<void> => {
+        saving.current = true;
+        try {
+            const { config } = normalizeConfig(next.fileserve);
+            const payload: RowPatch = {
+                status: next.status,
+                title: next.title,
+                content: next.content,
+                authorId: next.authorId,
+                dateLocal: next.dateLocal === "" ? "" : `${next.dateLocal}:00`,
+                terms: next.terms,
+                fileserve: Object.keys(config).length > 0 ? config : next.fileserve === null ? null : {},
+            };
+            await saveRow(row.localId, payload);
+            onEdit();
+        } catch (error) {
+            notify("err", `保存失败：${String(error)}`);
+        } finally {
+            saving.current = false;
+        }
+    };
+
     useEffect(() => {
         return () => {
             if (timer.current) {
                 clearTimeout(timer.current);
+                void persist(draftRef.current);
             }
         };
+        // row is constant for this instance (the App keys Detail by row), so
+        // the first-render closure is the right one to flush with.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // While no local edit is in flight, adopt what the server round-trip
@@ -69,26 +95,8 @@ export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, 
         if (timer.current) {
             clearTimeout(timer.current);
         }
-        timer.current = setTimeout(async () => {
-            saving.current = true;
-            try {
-                const { config } = normalizeConfig(next.fileserve);
-                const payload: RowPatch = {
-                    status: next.status,
-                    title: next.title,
-                    content: next.content,
-                    authorId: next.authorId,
-                    dateLocal: next.dateLocal === "" ? "" : `${next.dateLocal}:00`,
-                    terms: next.terms,
-                    fileserve: Object.keys(config).length > 0 ? config : next.fileserve === null ? null : {},
-                };
-                await saveRow(row.localId, payload);
-                onEdit();
-            } catch (error) {
-                notify("err", `保存失败：${String(error)}`);
-            } finally {
-                saving.current = false;
-            }
+        timer.current = setTimeout(() => {
+            void persist(next);
         }, 600);
     };
 
@@ -105,25 +113,33 @@ export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, 
     );
 
     const addRef = (taxonomy: string, ref: string) => {
-        const current = draft.terms[taxonomy] ?? [];
+        const current = draftRef.current.terms[taxonomy] ?? [];
         if (current.includes(ref)) {
             return;
         }
-        update({ terms: { ...draft.terms, [taxonomy]: [...current, ref] } });
+        update({ terms: { ...draftRef.current.terms, [taxonomy]: [...current, ref] } });
     };
 
-    const addTerm = (taxonomy: string, raw: string) => {
-        const name = raw.trim();
-        if (name === "") {
+    // Raw per-taxonomy input text; committed on Enter/blur.
+    const [termInputs, setTermInputs] = useState<Record<string, string>>({});
+
+    /** Commits the "、" separated input into the selection, merged and deduped. */
+    const commitTermInput = (taxonomy: string): void => {
+        const raw = termInputs[taxonomy] ?? "";
+        setTermInputs((prev) => ({ ...prev, [taxonomy]: "" }));
+        const tokens = splitTermInput(raw);
+        if (tokens.length === 0) {
             return;
         }
-        const existing = termOptions(taxonomy).find((option) => option.name.toLowerCase() === name.toLowerCase());
-        addRef(taxonomy, existing ? String(existing.id) : `name:${name}`);
+        const current = draftRef.current.terms;
+        update({
+            terms: { ...current, [taxonomy]: mergeTermTokens(current[taxonomy] ?? [], tokens, termOptions(taxonomy)) },
+        });
     };
 
     const removeTerm = (taxonomy: string, ref: string) => {
-        const current = draft.terms[taxonomy] ?? [];
-        update({ terms: { ...draft.terms, [taxonomy]: current.filter((item) => item !== ref) } });
+        const current = draftRef.current.terms[taxonomy] ?? [];
+        update({ terms: { ...draftRef.current.terms, [taxonomy]: current.filter((item) => item !== ref) } });
     };
 
     const refLabel = (taxonomy: string, ref: string): string => {
@@ -201,7 +217,20 @@ export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, 
                 return (
                     <div key={taxonomy}>
                         <span className="lbl">{TAXONOMY_LABELS[taxonomy] ?? taxonomy}</span>
-                        <div className="flex flex-wrap gap-x-3 gap-y-1 mb-1">
+                        <input
+                            className="w-full mb-1"
+                            placeholder="名称用「、」分隔可一次添加多个，回车确认"
+                            value={termInputs[taxonomy] ?? ""}
+                            onChange={(event) => setTermInputs((prev) => ({ ...prev, [taxonomy]: event.target.value }))}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    commitTermInput(taxonomy);
+                                }
+                            }}
+                            onBlur={() => commitTermInput(taxonomy)}
+                        />
+                        <div className="flex flex-wrap gap-x-3 gap-y-1">
                             {options.map((option) => {
                                 const ref = String(option.id);
                                 return (
@@ -236,17 +265,6 @@ export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, 
                                         </button>
                                     </span>
                                 ))}
-                            <input
-                                className="w-32 text-xs"
-                                placeholder="＋新建"
-                                onKeyDown={(event) => {
-                                    if (event.key === "Enter") {
-                                        event.preventDefault();
-                                        addTerm(taxonomy, event.currentTarget.value);
-                                        event.currentTarget.value = "";
-                                    }
-                                }}
-                            />
                         </div>
                     </div>
                 );
@@ -268,18 +286,6 @@ export default function Detail({ row, state, busy, onEdit, onPushRow, onRevert, 
                     config={draft.fileserve}
                     onChange={(config) => update({ fileserve: config })}
                 />
-            </div>
-
-            <div className="border-t border-neutral-200 pt-2 flex flex-wrap gap-2">
-                <button className="btn btn-primary" disabled={busy || !row.dirty} onClick={onPushRow}>
-                    推送此行
-                </button>
-                <button className="btn" disabled={busy} onClick={onRevert}>
-                    还原到快照
-                </button>
-                <button className="btn text-red-600" disabled={busy} onClick={onDelete}>
-                    删除本地行
-                </button>
             </div>
 
             <div className="text-xs text-neutral-400 space-y-0.5">

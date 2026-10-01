@@ -17,14 +17,35 @@ import {
     setSetting,
     setTermRefs,
     updatePostRow,
+    type PostRow,
 } from "./db.js";
 import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
+import { getProgress, setProgress } from "./progress.js";
 import { normalizeSiteUrl, ping, WpError } from "./wp.js";
 import { normalizeConfig } from "../shared/fileserve.js";
 
 export async function buildApp(): Promise<FastifyInstance> {
     const app = Fastify({ logger: false, bodyLimit: 16 * 1024 * 1024 });
+
+    // One corrupt fileserve blob (a hand-edited db, an interrupted write)
+    // must not take the whole state endpoint down.
+    const parseFileserve = (raw: string | null): unknown => {
+        if (!raw) {
+            return null;
+        }
+        try {
+            return JSON.parse(raw);
+        } catch {
+            return null;
+        }
+    };
+
+    const rowWithTerms = (saved: PostRow) => ({
+        ...saved,
+        terms: getTermRefs(saved.localId),
+        fileserveParsed: parseFileserve(saved.fileserve),
+    });
 
 function errorMessage(error: unknown): string {
     if (error instanceof WpError) {
@@ -59,11 +80,7 @@ function errorMessage(error: unknown): string {
         },
         authors: listAuthors(),
         terms,
-        posts: listPosts().map((row) => ({
-            ...row,
-            terms: getTermRefs(row.localId),
-            fileserveParsed: row.fileserve ? (JSON.parse(row.fileserve) as unknown) : null,
-        })),
+        posts: listPosts().map(rowWithTerms),
     };
 });
 
@@ -151,11 +168,30 @@ function errorMessage(error: unknown): string {
             : "{}"
         : row.fileserve;
 
+    // Partial patches (a grid cell edit) must not touch the author: only an
+    // explicit value (or an explicit null = "site default") changes it.
+    const parsedAuthorId =
+        body.authorId === undefined
+            ? row.authorId
+            : body.authorId === null || body.authorId === ""
+                ? null
+                : Number(body.authorId);
+    if (parsedAuthorId !== null && !Number.isInteger(parsedAuthorId)) {
+        return reply.code(400).send({ error: "作者必须是数字 id。" });
+    }
+    if (
+        body.dateLocal !== undefined &&
+        body.dateLocal !== "" &&
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(String(body.dateLocal))
+    ) {
+        return reply.code(400).send({ error: "发布时间格式无效。" });
+    }
+
     const next = {
         status: String(body.status ?? row.status),
         title: String(body.title ?? row.title),
         content: String(body.content ?? row.content),
-        authorId: body.authorId === null || body.authorId === undefined ? null : Number(body.authorId),
+        authorId: parsedAuthorId,
         dateLocal: String(body.dateLocal ?? row.dateLocal),
         fileserve,
     };
@@ -191,9 +227,7 @@ function errorMessage(error: unknown): string {
 
     const saved = getPost(localId);
     return {
-        row: saved
-            ? { ...saved, terms: getTermRefs(localId), fileserveParsed: saved.fileserve ? JSON.parse(saved.fileserve) : null }
-            : null,
+        row: saved ? rowWithTerms(saved) : null,
     };
 });
 
@@ -230,15 +264,23 @@ function errorMessage(error: unknown): string {
 });
 
     app.post("/api/sync", async () => {
-    const outcome = await runSync();
-    return outcome;
+    try {
+        return await runSync();
+    } finally {
+        setProgress(null);
+    }
 });
 
     app.post("/api/push", async (request) => {
     const body = (request.body ?? {}) as { localIds?: number[] };
-    const outcome = await runPush(Array.isArray(body.localIds) ? body.localIds : undefined);
-    return outcome;
+    try {
+        return await runPush(Array.isArray(body.localIds) ? body.localIds : undefined);
+    } finally {
+        setProgress(null);
+    }
 });
+
+    app.get("/api/progress", async () => getProgress());
 
     const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
     if (existsSync(distDir)) {

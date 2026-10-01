@@ -102,3 +102,14 @@ export interface PushOutcomeDTO {
 export function push(localIds?: number[]): Promise<PushOutcomeDTO> {
     return call<PushOutcomeDTO>("/api/push", "POST", { localIds });
 }
+
+export interface ProgressDTO {
+    phase: string;
+    done: number;
+    total: number;
+}
+
+/** Snapshot of the running pull/push; null when the tool is idle. */
+export function fetchProgress(): Promise<ProgressDTO | null> {
+    return call<ProgressDTO | null>("/api/progress", "GET");
+}

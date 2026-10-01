@@ -2,13 +2,13 @@
 
 为外部发帖器提供 REST API 的 WordPress 插件，命名空间 `aiya-publish/v1`。**随发帖器仓库单仓库维护**：本目录是源码真身（`publisher/wordpress_plugins/aiya-cms-resource-publisher`），`wp-content/plugins/aiya-cms-publish` 只是 `npm run plugin:sync`（发帖器仓库）产出的部署副本；历史上的独立 git 仓库已 subtree 并入发帖器仓库。
 
-**依赖 aiya-core**：插件头声明 `Requires Plugins: aiya-core`（WP 6.5+，`Requires at least` 亦为 6.5）——未安装/未启用 aiya-core 时 WordPress 直接拒绝激活；CLI 等旁路激活时入口文件兜底：显示管理提示且不注册任何路由。与 aiya-core 仍保持**零代码耦合**（不调用其类、不挂其内部过滤器），resource 文章类型由 core 注册，运行时以其启用为前提。
+**依赖 aiya-core**：不声明 `Requires Plugins` 头——该头按插件目录 slug 匹配依赖，而 core 插件本地 slug 为 `aiya-core`、线上为 `aiya-cms-core`，slug 头在两侧不可能同时成立（2026-09-29 摘除）。未安装/未启用 aiya-core 时由入口文件运行时兜底：显示管理提示且不注册任何路由；守卫在钩子回调内判定（WP 按选项顺序加载插件，加载期查 `AIYA_CORE_VERSION` 可能早于 core 而误判）。与 aiya-core 仍保持**零代码耦合**（不调用其类、不挂其内部过滤器），resource 文章类型由 core 注册，运行时以其启用为前提。
 
 ## 认证
 
 - 全部路由要求 **WordPress 应用密码**（Basic auth）：WP 后台 → 用户 → 资料页 → 应用密码。
 - 权限：读 = `edit_posts`；写 = `edit_posts` + 逐对象 `edit_post`；`status=publish` 需 `publish_posts`；`authorId` 代发他人需 `edit_others_posts`（编辑/管理员级账号满足）。
-- 未登录 / 凭据无效的请求会先被 aiya-core 的 REST 匿名锁拦成 404（`lock_wp_v2` 只放行 `publish_posts` 以上会话）；锁关闭时则由本插件的 permission_callback 回 401/403。
+- 未登录 / 凭据无效的请求由本插件的 permission_callback 回 401；已登录但能力不足回 403。本插件把 `/aiya-publish/v1` 宣告进 `aiya_core_firstparty_rest_namespaces`，因此 aiya-core 的匿名锁（`lock_wp_v2`）不再把该命名空间剥成 404——各类会话都能拿到自己能力等级对应的确切错误。
 - 纯 HTTP 环境使用应用密码需要 `WP_ENVIRONMENT_TYPE=local`（本地 compose 已设置）。
 
 ## 端点

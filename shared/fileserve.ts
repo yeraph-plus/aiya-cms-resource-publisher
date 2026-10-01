@@ -38,6 +38,36 @@ export const COMMON_FIELDS: FieldDef[] = [
     { id: "price", type: "number", default: 0, min: 0 },
 ];
 
+/** Suggested per-file price the editor pre-fills; site snapshots still normalize to 0. */
+export const ADAPTER_PRICE_DEFAULTS: Record<string, number> = {
+    platform: 2,
+    openlist_list: 10,
+    openlist_search: 10,
+    gofile_api: 10,
+};
+
+export function priceDefault(adapter: string): number {
+    return ADAPTER_PRICE_DEFAULTS[adapter] ?? 10;
+}
+
+/** Chinese labels for the editor; unknown ids fall back to the raw field name. */
+export const FIELD_LABELS: Record<string, string> = {
+    title: "标题",
+    price: "售价（积分）",
+    url: "链接",
+    code: "提取码",
+    path: "路径",
+    password: "密码",
+    per_page: "每页数量",
+    keywords: "关键词",
+    parent: "父目录",
+    folder_id: "文件夹 ID",
+};
+
+export function fieldLabel(id: string): string {
+    return FIELD_LABELS[id] ?? id;
+}
+
 export const ADAPTER_LABELS: Record<string, string> = {
     platform: "网盘链接",
     openlist_list: "OpenList 目录",
@@ -132,13 +162,13 @@ export function normalizeConfig(raw: unknown): { config: FileServeConfig; errors
     return { config, errors: [] };
 }
 
-/** All fields at their defaults, ready for the editor. */
+/** All fields at their defaults, ready for the editor; the price pre-fills per adapter. */
 export function emptyGroup(adapter: string): FileGroup {
     const group: Record<string, FieldValue> = {};
     for (const field of [...(ADAPTER_FIELDS[adapter] ?? []), ...COMMON_FIELDS]) {
         group[field.id] = field.default;
     }
-    return { ...group, adapter } as FileGroup;
+    return { ...group, adapter, price: priceDefault(adapter) } as FileGroup;
 }
 
 /** The next free short id: one past the highest numeric key, like the domain. */

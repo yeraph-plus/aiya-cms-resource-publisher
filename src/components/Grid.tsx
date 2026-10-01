@@ -1,12 +1,70 @@
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AgGridReact } from "ag-grid-react";
-import { AllCommunityModule, ModuleRegistry, type CellValueChangedEvent, type ColDef } from "ag-grid-community";
+import {
+    AllCommunityModule,
+    ModuleRegistry,
+    type CellValueChangedEvent,
+    type ColDef,
+    type ColumnMovedEvent,
+    type ColumnResizedEvent,
+    type ColumnState,
+    type GridApi,
+    type GridReadyEvent,
+    type SortChangedEvent,
+} from "ag-grid-community";
 import type { AuthorDTO, RowDTO, TermInfo } from "../types";
 import { TAXONOMY_ORDER } from "../types";
 import { configSummary } from "../../shared/fileserve";
 import type { RowPatch } from "../api";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
+
+const COLUMN_STATE_KEY = "publisher.gridColumnState.v1";
+
+/** Widths/order/sort as the user last arranged them, or null. */
+function loadColumnState(): ColumnState[] | null {
+    try {
+        const parsed = JSON.parse(window.localStorage.getItem(COLUMN_STATE_KEY) ?? "null");
+        return Array.isArray(parsed) ? (parsed as ColumnState[]) : null;
+    } catch {
+        return null;
+    }
+}
+
+function persistColumnState(api: GridApi<RowDTO>): void {
+    window.localStorage.setItem(COLUMN_STATE_KEY, JSON.stringify(api.getColumnState()));
+}
+
+/**
+ * Only column events the user caused (sources "uiColumn*") may overwrite the
+ * saved arrangement. AG Grid also fires resize/sort events with sources like
+ * "gridInitializing", "api" and "setColumnState" — persisting those would
+ * clobber the saved widths with the not-yet-restored defaults at every
+ * startup, which looked exactly like "widths reset on the first click".
+ */
+function isUserColumnEvent(source: unknown): boolean {
+    return typeof source === "string" && source.startsWith("ui");
+}
+
+/** Module-level so AgGridReact never sees a new defaultColDef identity per render. */
+const DEFAULT_COL_DEF: ColDef<RowDTO> = { resizable: true, sortable: true };
+
+/** Apply the saved state, skipping ids that no longer exist in the current defs.
+ * Columns are fixed-width (no flex), so a stale flex value in old saved states
+ * must be dropped — a surviving flex lets a layout pass override user widths. */
+function applySavedColumnState(api: GridApi<RowDTO>): void {
+    const saved = loadColumnState();
+    if (!saved) {
+        return;
+    }
+    const known = new Set((api.getColumns() ?? []).map((column) => column.getColId()));
+    const state = saved
+        .filter((entry) => known.has(entry.colId))
+        .map((entry) => ({ ...entry, flex: null }));
+    if (state.length > 0) {
+        api.applyColumnState({ state, applyOrder: true });
+    }
+}
 
 interface Props {
     rows: RowDTO[];
@@ -91,11 +149,11 @@ export default function Grid({ rows, terms, authors, selectedId, onSelect, onEdi
                     );
                 },
             },
-            { headerName: "线上ID", field: "postId", width: 70 },
+            { headerName: "ID", field: "postId", width: 70 },
             {
                 headerName: "标题",
                 field: "title",
-                flex: 2,
+                width: 220,
                 editable: true,
                 cellClass: "leading-5",
             },
@@ -106,12 +164,12 @@ export default function Grid({ rows, terms, authors, selectedId, onSelect, onEdi
             },
             {
                 headerName: "分类",
-                flex: 1,
+                width: 150,
                 valueGetter: (params) => refsToNames(params.data?.terms["resource_category"], terms["resource_category"]),
             },
             {
                 headerName: "标签",
-                flex: 1.5,
+                width: 200,
                 valueGetter: (params) =>
                     tagTaxonomies
                         .map((slug) => refsToNames(params.data?.terms[slug], terms[slug]))
@@ -121,7 +179,7 @@ export default function Grid({ rows, terms, authors, selectedId, onSelect, onEdi
             {
                 headerName: "发布时间",
                 field: "dateLocal",
-                flex: 1,
+                width: 150,
                 editable: true,
                 valueFormatter: (params) => (params.value ?? "").replace("T", " ").slice(0, 16),
             },
@@ -133,7 +191,7 @@ export default function Grid({ rows, terms, authors, selectedId, onSelect, onEdi
             {
                 headerName: "错误",
                 field: "lastError",
-                flex: 1,
+                width: 160,
                 cellClass: "text-red-600 text-xs",
                 tooltipField: "lastError",
             },
@@ -154,21 +212,71 @@ export default function Grid({ rows, terms, authors, selectedId, onSelect, onEdi
         }
     };
 
+    // Column state survives reloads and — the visible bug — the defs rebuild
+    // each refresh causes: AG Grid answers a new columnDefs array by resetting
+    // column state, so every debounced save riding on a row switch wiped the
+    // user's widths. Re-apply the saved arrangement whenever defs change.
+    const apiRef = useRef<GridApi<RowDTO> | null>(null);
+
+    // Stable identities: like defaultColDef, a fresh callback object per
+    // render is only churn for the grid wrapper.
+    const getRowId = useCallback((params: { data?: RowDTO }) => String(params.data!.localId), []);
+
+    const onGridReady = useCallback((event: GridReadyEvent<RowDTO>) => {
+        apiRef.current = event.api;
+        applySavedColumnState(event.api);
+    }, []);
+
+    const onColumnResized = useCallback((event: ColumnResizedEvent<RowDTO>) => {
+        if (event.finished && isUserColumnEvent(event.source)) {
+            persistColumnState(event.api);
+        }
+    }, []);
+
+    const onColumnMoved = useCallback((event: ColumnMovedEvent<RowDTO>) => {
+        if (event.finished && isUserColumnEvent(event.source)) {
+            persistColumnState(event.api);
+        }
+    }, []);
+
+    const onSortChanged = useCallback((event: SortChangedEvent<RowDTO>) => {
+        if (isUserColumnEvent(event.source)) {
+            persistColumnState(event.api);
+        }
+    }, []);
+
+    const onRowClicked = useCallback(
+        (event: { data?: RowDTO }) => {
+            const id = event.data?.localId;
+            if (id !== undefined) {
+                onSelect(id);
+            }
+        },
+        [onSelect],
+    );
+
+    // Re-apply the saved arrangement whenever the defs identity changes (a
+    // refresh rebuilds terms/authors), so user widths outlive every rebuild.
+    useEffect(() => {
+        if (apiRef.current) {
+            applySavedColumnState(apiRef.current);
+        }
+    }, [columnDefs]);
+
     return (
         <div className="h-full">
             <AgGridReact<RowDTO>
                 rowData={rows}
                 columnDefs={columnDefs}
                 rowSelection="single"
-                getRowId={(params) => String(params.data.localId)}
+                getRowId={getRowId}
+                onGridReady={onGridReady}
+                onColumnResized={onColumnResized}
+                onColumnMoved={onColumnMoved}
+                onSortChanged={onSortChanged}
                 onCellValueChanged={onCellValueChanged}
-                onRowClicked={(event) => {
-                    const id = event.data?.localId;
-                    if (id !== undefined) {
-                        onSelect(id);
-                    }
-                }}
-                defaultColDef={{ resizable: true, sortable: true }}
+                onRowClicked={onRowClicked}
+                defaultColDef={DEFAULT_COL_DEF}
                 headerHeight={30}
                 rowHeight={30}
             />

@@ -224,12 +224,20 @@ const COLUMN_OF: Record<string, string> = {
     snapshot: "snapshot",
 };
 
-/** better-sqlite3 binds booleans as... nothing — it throws. Convert them. */
+/** better-sqlite3 binds booleans as... nothing — it throws. Convert them.
+ * Objects and arrays get stringified as a last defense: a raw object binding
+ * would throw deep inside the driver instead of at the call site. */
 function toBind(value: unknown): unknown {
     if (value === undefined) {
         return null;
     }
-    return typeof value === "boolean" ? (value ? 1 : 0) : value;
+    if (typeof value === "boolean") {
+        return value ? 1 : 0;
+    }
+    if (value === null || typeof value === "number" || typeof value === "bigint" || typeof value === "string" || Buffer.isBuffer(value)) {
+        return value;
+    }
+    return JSON.stringify(value);
 }
 
 export function insertPost(patch: PostPatch): number {

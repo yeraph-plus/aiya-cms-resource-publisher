@@ -1,4 +1,14 @@
-import { ADAPTER_FIELDS, ADAPTER_LABELS, emptyGroup, nextId, type FieldValue, type FileServeConfig } from "../../shared/fileserve";
+import {
+    ADAPTER_FIELDS,
+    ADAPTER_LABELS,
+    COMMON_FIELDS,
+    emptyGroup,
+    fieldLabel,
+    nextId,
+    priceDefault,
+    type FieldValue,
+    type FileServeConfig,
+} from "../../shared/fileserve";
 
 interface Props {
     config: FileServeConfig | null;
@@ -31,7 +41,13 @@ export default function FileServeEditor({ config, onChange }: Props) {
         if (!previous) {
             return;
         }
-        commit({ ...groups, [id]: { ...emptyGroup(adapter), title: previous.title ?? "", price: previous.price ?? 0 } });
+        // A price the user never touched (0 or the old adapter's default)
+        // follows the new adapter's suggestion; a custom price survives.
+        const untouched = (previous.price ?? 0) === 0 || previous.price === priceDefault(previous.adapter);
+        commit({
+            ...groups,
+            [id]: { ...emptyGroup(adapter), title: previous.title ?? "", ...(untouched ? {} : { price: previous.price ?? 0 }) },
+        });
     };
 
     const setField = (id: string, field: string, value: FieldValue): void => {
@@ -45,7 +61,7 @@ export default function FileServeEditor({ config, onChange }: Props) {
     return (
         <div className="space-y-2">
             {entries.map(([id, group]) => {
-                const fields = ADAPTER_FIELDS[group.adapter] ?? [];
+                const fields = [...(ADAPTER_FIELDS[group.adapter] ?? []), ...COMMON_FIELDS];
                 return (
                     <div key={id} className="border border-neutral-200 rounded p-2 bg-neutral-50">
                         <div className="flex items-center gap-2 mb-1.5">
@@ -61,6 +77,7 @@ export default function FileServeEditor({ config, onChange }: Props) {
                                     </option>
                                 ))}
                             </select>
+                            <span className="text-[11px] text-neutral-400">默认售价 {priceDefault(group.adapter)} 分</span>
                             <button
                                 className="ml-auto text-xs text-red-500 hover:underline"
                                 onClick={() => removeGroup(id)}
@@ -69,36 +86,46 @@ export default function FileServeEditor({ config, onChange }: Props) {
                             </button>
                         </div>
                         <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
-                            {fields.map((field) => (
-                                <label key={field.id} className={field.type === "text" && field.id !== "code" && field.id !== "password" ? "col-span-2" : "block"}>
-                                    <span className="lbl">{field.id}</span>
-                                    {field.type === "text" ? (
-                                        <input
-                                            className="w-full"
-                                            value={String(group[field.id] ?? "")}
-                                            onChange={(event) => setField(id, field.id, event.target.value)}
-                                        />
-                                    ) : (
-                                        <input
-                                            type="number"
-                                            className="w-full"
-                                            value={group[field.id] === null || group[field.id] === undefined ? "" : Number(group[field.id])}
-                                            onChange={(event) =>
-                                                setField(id, field.id, event.target.value === "" ? null : Number(event.target.value))
-                                            }
-                                        />
-                                    )}
-                                </label>
-                            ))}
+                            {fields.map((field) => {
+                                const wide =
+                                    field.type === "text" && field.id !== "code" && field.id !== "password" && field.id !== "title";
+                                return (
+                                    <label key={field.id} className={wide ? "col-span-2" : "block"}>
+                                        <span className="lbl">{fieldLabel(field.id)}</span>
+                                        {field.type === "text" ? (
+                                            <input
+                                                className="w-full"
+                                                value={String(group[field.id] ?? "")}
+                                                onChange={(event) => setField(id, field.id, event.target.value)}
+                                            />
+                                        ) : (
+                                            <input
+                                                type="number"
+                                                className="w-full"
+                                                min={field.min}
+                                                value={group[field.id] === null || group[field.id] === undefined ? "" : Number(group[field.id])}
+                                                onChange={(event) =>
+                                                    setField(id, field.id, event.target.value === "" ? null : Number(event.target.value))
+                                                }
+                                            />
+                                        )}
+                                    </label>
+                                );
+                            })}
                         </div>
                     </div>
                 );
             })}
 
-            <div className="flex items-center gap-3">
-                <button className="btn" onClick={addGroup}>
-                    + 添加组
-                </button>
+            <div className="space-y-1.5">
+                <div className="flex items-center gap-3">
+                    <button className="btn" onClick={addGroup}>
+                        + 添加组
+                    </button>
+                    {entries.length === 0 && (
+                        <span className="text-xs text-neutral-400">没有数据组（推送空配置会清除线上文件列表）</span>
+                    )}
+                </div>
                 {entries.length > 0 && (
                     <details className="text-xs text-neutral-500">
                         <summary className="cursor-pointer select-none">JSON 预览</summary>
@@ -107,7 +134,6 @@ export default function FileServeEditor({ config, onChange }: Props) {
                         </pre>
                     </details>
                 )}
-                {entries.length === 0 && <span className="text-xs text-neutral-400">没有数据组（推送空配置会清除线上文件列表）</span>}
             </div>
         </div>
     );

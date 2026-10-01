@@ -63,6 +63,8 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
             } else {
                 await onSaved({ kind: "err", text: `连接失败：${result.error}` });
             }
+        } catch (error) {
+            await onSaved({ kind: "err", text: `连接失败：${String(error)}` });
         } finally {
             setBusy(false);
         }
