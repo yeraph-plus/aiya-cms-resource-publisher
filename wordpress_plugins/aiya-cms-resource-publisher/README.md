@@ -1,6 +1,6 @@
 # aiya-publish
 
-为外部发帖器提供 REST API 的 WordPress 插件，命名空间 `aiya-publish/v1`。**随发帖器仓库单仓库维护**：本目录是源码真身（`publisher/wordpress_plugins/aiya-cms-resource-publisher`），`wp-content/plugins/aiya-cms-publish` 只是 `npm run plugin:sync`（发帖器仓库）产出的部署副本；历史上的独立 git 仓库已 subtree 并入发帖器仓库。
+为外部发帖器提供 REST API 的 WordPress 插件，命名空间 `aiya-publish/v1`。**随发帖器仓库单仓库维护**：源码真身是 `publisher/wordpress_plugins/aiya-cms-resource-publisher`，`wp-content/plugins/aiya-cms-publish` 是 `npm run plugin:sync`（发帖器仓库）产出的部署副本；历史上的独立 git 仓库已 subtree 并入发帖器仓库。
 
 **依赖 aiya-core**：不声明 `Requires Plugins` 头——该头按插件目录 slug 匹配依赖，而 core 插件本地 slug 为 `aiya-core`、线上为 `aiya-cms-core`，slug 头在两侧不可能同时成立（2026-09-29 摘除）。未安装/未启用 aiya-core 时由入口文件运行时兜底：显示管理提示且不注册任何路由；守卫在钩子回调内判定（WP 按选项顺序加载插件，加载期查 `AIYA_CORE_VERSION` 可能早于 core 而误判）。与 aiya-core 仍保持**零代码耦合**（不调用其类、不挂其内部过滤器），resource 文章类型由 core 注册，运行时以其启用为前提。
 
@@ -34,7 +34,7 @@
 
 ## 本地开发
 
-**源在本仓库**（`publisher/wordpress_plugins/aiya-publish`），改动后用发帖器仓库的 `npm run plugin:sync` 镜像到 `wp-content/plugins/aiya-publish` 再验证（目标侧 `vendor/` 与 `.git` 不参与同步）。
+**源在发帖器仓库**（`publisher/wordpress_plugins/aiya-cms-resource-publisher`），改动后用发帖器仓库的 `npm run plugin:sync` 镜像到 `wp-content/plugins/aiya-cms-publish` 再验证（目标侧 `vendor/` 与 `.git` 不参与同步）。
 
 宿主机无需 PHP，全部在容器内执行（vendor 已随部署副本安装过一次；重建时先下载 composer.phar）：
 
@@ -44,7 +44,7 @@ docker compose run --rm --entrypoint sh wpcli \
       && php composer.phar install"
 
 docker compose run --rm --entrypoint sh wpcli \
-  -c "cd /var/www/html/wp-content/plugins/aiya-publish \
+    -c "cd /var/www/html/wp-content/plugins/aiya-cms-publish \
       && php vendor/bin/parallel-lint --exclude .git --exclude vendor . \
       && php vendor/bin/phpunit \
       && php vendor/bin/phpstan analyse --memory-limit=1G --no-progress \
