@@ -18,6 +18,9 @@ import { buildPayload } from "./payload.js";
 import { normalizeConfig } from "../shared/fileserve.js";
 import { setProgress } from "./progress.js";
 
+/** Consecutive transport-level failures (status 0) before the run aborts. */
+const TRANSPORT_ABORT_LIMIT = 3;
+
 export interface PushError {
     localId: number;
     title: string;
@@ -86,7 +89,13 @@ function applyResponse(row: PostRow, item: WpItem): void {
 
 /**
  * Push every dirty row (or the given subset): create rows without a post id,
- * update the rest. A failed row records the error and the run continues.
+ * update the rest. The whole per-row write — payload build, site call,
+ * response application — sits in one try, so a poison row costs itself and
+ * never the run. Transport-level deaths (status 0: unreachable, dead proxy)
+ * are the exception: they hit every remaining row identically, so three in a
+ * row abort the run before the queue burns 30 seconds per row on a dead
+ * site. A 4xx proves the pipe works and resets the count — validation
+ * failures deserve their per-row tries.
  */
 export async function runPush(localIds?: number[]): Promise<PushOutcome> {
     const outcome: PushOutcome = { ok: false, error: null, pushed: 0, failed: 0, errors: [] };
@@ -102,6 +111,7 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
         return outcome;
     }
 
+    let transportFailures = 0;
     for (const [index, row] of rows.entries()) {
         setProgress({ phase: `推送：${row.title.slice(0, 16) || `#${row.localId}`}`, done: index, total: rows.length });
         const { config, errors } = normalizeConfig(row.fileserve ?? null);
@@ -113,8 +123,8 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
         }
 
         const fileserve = Object.keys(config).length > 0 ? JSON.stringify(config) : row.fileserve;
-        const payload = buildPayload({ ...row, fileserve }, getTermRefs(row.localId));
         try {
+            const payload = buildPayload({ ...row, fileserve }, getTermRefs(row.localId));
             const item = row.postId
                 ? await updateResource(
                       { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword, proxyUrl: settings.proxyUrl },
@@ -127,11 +137,24 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
                   );
             applyResponse(row, item);
             outcome.pushed += 1;
+            transportFailures = 0;
         } catch (error) {
             const text = message(error);
             updatePostRow(row.localId, { lastError: text });
             outcome.errors.push({ localId: row.localId, title: row.title, message: text });
             outcome.failed += 1;
+            if (error instanceof WpError && error.status === 0) {
+                transportFailures += 1;
+                if (transportFailures >= TRANSPORT_ABORT_LIMIT) {
+                    const remaining = rows.length - index - 1;
+                    outcome.error =
+                        `站点连续 ${transportFailures} 次不可达，已中止本轮推送` +
+                        (remaining > 0 ? `：剩余 ${remaining} 行保持待推送。` : "。");
+                    break;
+                }
+            } else {
+                transportFailures = 0;
+            }
         }
     }
 

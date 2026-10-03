@@ -9,6 +9,7 @@ import {
     getPost,
     getSettings,
     getTermRefs,
+    importPosts,
     insertPost,
     listAuthors,
     listPosts,
@@ -23,6 +24,8 @@ import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
 import { getProgress, setProgress } from "./progress.js";
 import { normalizeSiteUrl, ping, WpError } from "./wp.js";
+import { parseCsv } from "../shared/csv.js";
+import { buildImportRows, guessMapping, TAXONOMY_ORDER, type ImportMapping } from "../shared/import.js";
 import { normalizeConfig } from "../shared/fileserve.js";
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -61,9 +64,8 @@ function errorMessage(error: unknown): string {
         (grouped[term.taxonomy] ??= []).push({ id: term.id, name: term.name, slug: term.slug });
     }
     // Group terms per taxonomy in the fixed registry order (category first).
-    const order = ["resource_category", "resource_original", "resource_character", "resource_author", "resource_content", "resource_other"];
     const terms: Record<string, { id: number; name: string; slug: string }[]> = {};
-    for (const slug of order) {
+    for (const slug of TAXONOMY_ORDER) {
         if (grouped[slug]) {
             terms[slug] = grouped[slug] as { id: number; name: string; slug: string }[];
         }
@@ -263,22 +265,107 @@ function errorMessage(error: unknown): string {
     return { ok: true };
 });
 
-    app.post("/api/sync", async () => {
-    try {
-        return await runSync();
-    } finally {
-        setProgress(null);
-    }
-});
+    // CSV import, two stateless steps: the client sends the raw file text
+    // twice (preview, then apply) instead of the server holding parsed
+    // state. Parsing, mapping guesses and row validation all live in
+    // shared/import.ts — the client reruns the same pure code for its live
+    // preview, so the counts it shows are the counts the apply writes.
+    app.post("/api/import/preview", async (request, reply) => {
+        const body = (request.body ?? {}) as { csv?: unknown };
+        if (typeof body.csv !== "string" || body.csv.trim() === "") {
+            return reply.code(400).send({ error: "没有收到 CSV 文本。" });
+        }
+        const parsed = parseCsv(body.csv);
+        if (parsed.headers.length === 0) {
+            return reply.code(400).send({ error: "CSV 没有可读的表头行。" });
+        }
+        return {
+            headers: parsed.headers,
+            rowCount: parsed.rows.length,
+            preview: parsed.rows.slice(0, 5),
+            guess: guessMapping(parsed.headers),
+        };
+    });
 
-    app.post("/api/push", async (request) => {
-    const body = (request.body ?? {}) as { localIds?: number[] };
-    try {
-        return await runPush(Array.isArray(body.localIds) ? body.localIds : undefined);
-    } finally {
-        setProgress(null);
-    }
-});
+    app.post("/api/import/apply", async (request, reply) => {
+        const body = (request.body ?? {}) as {
+            csv?: unknown;
+            mapping?: unknown;
+            defaultStatus?: unknown;
+            defaultAuthorId?: unknown;
+            unmatchedAuthor?: unknown;
+        };
+        if (typeof body.csv !== "string" || body.csv.trim() === "") {
+            return reply.code(400).send({ error: "没有收到 CSV 文本。" });
+        }
+        const mapping: ImportMapping = {};
+        if (body.mapping !== null && typeof body.mapping === "object") {
+            for (const [key, value] of Object.entries(body.mapping as Record<string, unknown>)) {
+                mapping[key] = typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+            }
+        }
+        const defaultStatus =
+            typeof body.defaultStatus === "string" && ["publish", "draft", "future"].includes(body.defaultStatus)
+                ? body.defaultStatus
+                : "draft";
+        const defaultAuthorId =
+            typeof body.defaultAuthorId === "number" && Number.isInteger(body.defaultAuthorId) && body.defaultAuthorId > 0
+                ? body.defaultAuthorId
+                : null;
+        const unmatchedAuthor = body.unmatchedAuthor === "default" ? "default" : "error";
+
+        const termOptions: Record<string, { id: number; name: string; slug: string }[]> = {};
+        for (const term of listTerms()) {
+            (termOptions[term.taxonomy] ??= []).push({ id: term.id, name: term.name, slug: term.slug });
+        }
+
+        const built = buildImportRows(parseCsv(body.csv), mapping, {
+            authors: listAuthors(),
+            termOptions,
+            defaultStatus,
+            defaultAuthorId,
+            unmatchedAuthor,
+        });
+        if (built.fatal !== null) {
+            return reply.code(400).send({ error: built.fatal });
+        }
+
+        const localIds = importPosts(built.rows);
+        return { imported: localIds.length, failed: built.errors.length, errors: built.errors, localIds };
+    });
+
+    // Pull and push both own the site link and the progress slot; they must
+    // not interleave — two tabs defeat the client-side busy flag, and a push
+    // racing a sync's row merge would write snapshots against moving rows.
+    // One in-flight slot serializes them; the loser gets a 409.
+    let siteOperation: "sync" | "push" | null = null;
+
+    app.post("/api/sync", async (request, reply) => {
+        if (siteOperation !== null) {
+            return reply.code(409).send({ error: `已有${siteOperation === "sync" ? "拉取" : "推送"}在进行中，等它结束再试。` });
+        }
+        siteOperation = "sync";
+        try {
+            return await runSync();
+        } finally {
+            setProgress(null);
+            siteOperation = null;
+        }
+    });
+
+    app.post("/api/push", async (request, reply) => {
+        const body = (request.body ?? {}) as { localIds?: number[] };
+        if (siteOperation !== null) {
+            return reply.code(409).send({ error: `已有${siteOperation === "sync" ? "拉取" : "推送"}在进行中，等它结束再试。` });
+        }
+        siteOperation = "push";
+        try {
+            return await runPush(Array.isArray(body.localIds) ? body.localIds : undefined);
+        } finally {
+            setProgress(null);
+            siteOperation = null;
+        }
+    });
 
     app.get("/api/progress", async () => getProgress());
 

@@ -23,6 +23,8 @@ export interface SyncOutcome {
     refreshed: number;
     conflicts: number;
     missing: number;
+    /** Items that could not be merged (malformed remote data) and were passed over. */
+    skipped: number;
 }
 
 function creds() {
@@ -141,7 +143,7 @@ function mergeRemote(item: WpItem, outcome: SyncOutcome): void {
  * conflicting instead.
  */
 export async function runSync(): Promise<SyncOutcome> {
-    const outcome: SyncOutcome = { ok: false, error: null, fetched: 0, created: 0, refreshed: 0, conflicts: 0, missing: 0 };
+    const outcome: SyncOutcome = { ok: false, error: null, fetched: 0, created: 0, refreshed: 0, conflicts: 0, missing: 0, skipped: 0 };
     const settings = getSettings();
     if (!settings.siteUrl || !settings.username || !settings.appPassword) {
         outcome.error = "先在设置里填好站点地址、用户名和应用密码。";
@@ -188,11 +190,20 @@ export async function runSync(): Promise<SyncOutcome> {
             }
             setProgress({ phase: "拉取资源", done: outcome.fetched, total: box.total ?? 0 });
             for (const item of items) {
-                // A row the publisher itself pushed a moment ago can come
-                // back mid-sync; merging it is harmless — dirty rows keep
-                // their local state.
-                mergeRemote(item, outcome);
-                seen.add(item.id);
+                // One malformed item must not kill the whole pull: merge it
+                // in isolation, count the skip, keep paging. The id lands in
+                // `seen` before the merge so a skipped item's local row is
+                // not misread as "missing on the site" by the sweep below.
+                try {
+                    seen.add(item.id);
+                    // A row the publisher itself pushed a moment ago can come
+                    // back mid-sync; merging it is harmless — dirty rows keep
+                    // their local state.
+                    mergeRemote(item, outcome);
+                } catch {
+                    outcome.skipped += 1;
+                    continue;
+                }
                 if (item.modifiedGmt > maxModified) {
                     maxModified = item.modifiedGmt;
                 }

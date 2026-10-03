@@ -85,6 +85,7 @@ export interface SyncOutcomeDTO {
     refreshed: number;
     conflicts: number;
     missing: number;
+    skipped: number;
 }
 
 export function sync(): Promise<SyncOutcomeDTO> {
@@ -101,6 +102,42 @@ export interface PushOutcomeDTO {
 
 export function push(localIds?: number[]): Promise<PushOutcomeDTO> {
     return call<PushOutcomeDTO>("/api/push", "POST", { localIds });
+}
+
+export interface ImportPreviewDTO {
+    headers: string[];
+    rowCount: number;
+    preview: string[][];
+    guess: Record<string, number | null>;
+}
+
+export function importPreview(csv: string): Promise<ImportPreviewDTO> {
+    return call<ImportPreviewDTO>("/api/import/preview", "POST", { csv });
+}
+
+export interface ImportApplyPayload {
+    csv: string;
+    mapping: Record<string, number | null>;
+    defaultStatus: string;
+    defaultAuthorId: number | null;
+    unmatchedAuthor: "error" | "default";
+}
+
+export interface ImportRowErrorDTO {
+    row: number;
+    title: string;
+    error: string;
+}
+
+export interface ImportApplyResultDTO {
+    imported: number;
+    failed: number;
+    errors: ImportRowErrorDTO[];
+    localIds: number[];
+}
+
+export function importApply(payload: ImportApplyPayload): Promise<ImportApplyResultDTO> {
+    return call<ImportApplyResultDTO>("/api/import/apply", "POST", payload);
 }
 
 export interface ProgressDTO {

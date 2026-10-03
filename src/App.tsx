@@ -4,6 +4,7 @@ import type { StateDTO } from "./types";
 import Grid from "./components/Grid";
 import Detail from "./components/Detail";
 import SettingsPanel from "./components/SettingsPanel";
+import ImportPanel from "./components/ImportPanel";
 
 export type Filter = "all" | "dirty" | "conflict" | "new" | "missing";
 
@@ -17,6 +18,7 @@ export default function App() {
     const [selectedId, setSelectedId] = useState<number | null>(null);
     const [filter, setFilter] = useState<Filter>("all");
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [importOpen, setImportOpen] = useState(false);
     const [busy, setBusy] = useState(false);
     const [toast, setToast] = useState<Toast | null>(null);
     const [revision, setRevision] = useState(0);
@@ -124,7 +126,8 @@ export default function App() {
             } else {
                 notify(
                     "ok",
-                    `拉取完成：获取 ${outcome.fetched} 条，新增 ${outcome.created}，刷新 ${outcome.refreshed}，冲突 ${outcome.conflicts}，线上缺失 ${outcome.missing}`,
+                    `拉取完成：获取 ${outcome.fetched} 条，新增 ${outcome.created}，刷新 ${outcome.refreshed}，冲突 ${outcome.conflicts}，线上缺失 ${outcome.missing}` +
+                        (outcome.skipped > 0 ? `，跳过畸形 ${outcome.skipped} 条` : ""),
                 );
             }
             await refresh();
@@ -224,7 +227,7 @@ export default function App() {
                         <option value="new">未推送新行</option>
                         <option value="missing">线上缺失</option>
                     </select>
-                    <button className="btn" onClick={() => setSettingsOpen(true)}>
+                    <button className="btn" disabled={busy} onClick={() => setSettingsOpen(true)}>
                         设置
                     </button>
                 </span>
@@ -239,6 +242,9 @@ export default function App() {
                 <span className="pl-2 border-l border-neutral-200 flex items-center gap-2">
                     <button className="btn" disabled={busy} onClick={onNew}>
                         新建行
+                    </button>
+                    <button className="btn" disabled={busy} onClick={() => setImportOpen(true)}>
+                        导入 CSV
                     </button>
                 </span>
                 <span className="pl-2 border-l border-neutral-200 flex items-center gap-2">
@@ -292,6 +298,17 @@ export default function App() {
                     state={state}
                     onClose={() => setSettingsOpen(false)}
                     onSaved={async (message) => {
+                        notify(message.kind, message.text);
+                        await refresh();
+                    }}
+                />
+            )}
+
+            {importOpen && (
+                <ImportPanel
+                    state={state}
+                    onClose={() => setImportOpen(false)}
+                    onDone={async (message) => {
                         notify(message.kind, message.text);
                         await refresh();
                     }}

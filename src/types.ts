@@ -49,20 +49,4 @@ export interface StateDTO {
     posts: RowDTO[];
 }
 
-export const TAXONOMY_ORDER = [
-    "resource_category",
-    "resource_original",
-    "resource_character",
-    "resource_author",
-    "resource_content",
-    "resource_other",
-] as const;
-
-export const TAXONOMY_LABELS: Record<string, string> = {
-    resource_category: "分类",
-    resource_original: "原作",
-    resource_character: "角色",
-    resource_author: "作者",
-    resource_content: "内容描述",
-    resource_other: "其他",
-};
+export { TAXONOMY_ORDER, TAXONOMY_LABELS } from "../shared/import";

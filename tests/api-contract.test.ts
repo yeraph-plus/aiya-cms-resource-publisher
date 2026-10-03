@@ -111,3 +111,96 @@ describe("local api contract", () => {
         expect(removed.json().ok).toBe(true);
     });
 });
+
+describe("csv import", () => {
+    it("previews headers, row count and the mapping guess", async () => {
+        const res = await app.inject({
+            method: "POST",
+            url: "/api/import/preview",
+            payload: { csv: "标题,分类\n甲,漫画\n乙,动画" },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.headers).toEqual(["标题", "分类"]);
+        expect(body.rowCount).toBe(2);
+        expect(body.preview).toEqual([["甲", "漫画"], ["乙", "动画"]]);
+        expect(body.guess.title).toBe(0);
+        expect(body.guess["term:resource_category"]).toBe(1);
+        expect(body.guess.author).toBeNull();
+    });
+
+    it("imports good rows into the queue and reports the bad ones per row", async () => {
+        const csv = [
+            "标题,正文,状态,发布时间,分类",
+            "导入甲,正文,publish,2026/10/5 9:30,漫画、新标签",
+            "导入乙,,future,",
+            "",
+        ].join("\n");
+        const res = await app.inject({
+            method: "POST",
+            url: "/api/import/apply",
+            payload: {
+                csv,
+                mapping: { title: 0, content: 1, status: 2, date: 3, "term:resource_category": 4 },
+                defaultStatus: "draft",
+                unmatchedAuthor: "error",
+            },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().imported).toBe(1);
+        expect(res.json().failed).toBe(1);
+        expect(res.json().errors).toEqual([
+            { row: 2, title: "导入乙", error: "定时（future）行必须携带发布时间" },
+        ]);
+        expect(res.json().localIds).toHaveLength(1);
+
+        const state = await app.inject({ method: "GET", url: "/api/state" });
+        const row = state.json().posts.find((post: { title: string }) => post.title === "导入甲");
+        expect(row.dirty).toBe(true);
+        expect(row.postId).toBeNull();
+        expect(row.status).toBe("publish");
+        expect(row.dateLocal).toBe("2026-10-05T09:30");
+        // The refs read back through the (local_id, taxonomy, ref) index, so
+        // they arrive in byte order, not insertion order — compare as sets.
+        expect(row.terms.resource_category).toHaveLength(2);
+        expect(row.terms.resource_category).toEqual(expect.arrayContaining(["name:漫画", "name:新标签"]));
+    });
+
+    it("refuses an import with no title column and writes nothing", async () => {
+        const before = await app.inject({ method: "GET", url: "/api/state" });
+        const count = before.json().posts.length;
+
+        const res = await app.inject({
+            method: "POST",
+            url: "/api/import/apply",
+            payload: { csv: "正文\n甲", mapping: { content: 0 }, defaultStatus: "draft", unmatchedAuthor: "error" },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().error).toContain("未映射");
+
+        const after = await app.inject({ method: "GET", url: "/api/state" });
+        expect(after.json().posts.length).toBe(count);
+    });
+
+    it("refuses an import past the row cap", async () => {
+        const csv = "标题\n" + Array.from({ length: 5001 }, (_, i) => `t${i}`).join("\n");
+        const res = await app.inject({
+            method: "POST",
+            url: "/api/import/apply",
+            payload: { csv, mapping: { title: 0 }, defaultStatus: "draft", unmatchedAuthor: "error" },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().error).toContain("5000");
+    });
+
+    it("answers 400 when the csv text is missing or headerless", async () => {
+        const empty = await app.inject({ method: "POST", url: "/api/import/preview", payload: { csv: "   " } });
+        expect(empty.statusCode).toBe(400);
+
+        const headerless = await app.inject({ method: "POST", url: "/api/import/preview", payload: { csv: "" } });
+        expect(headerless.statusCode).toBe(400);
+
+        const noBody = await app.inject({ method: "POST", url: "/api/import/apply", payload: {} });
+        expect(noBody.statusCode).toBe(400);
+    });
+});

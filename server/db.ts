@@ -269,6 +269,40 @@ export function deletePost(localId: number): void {
     db.prepare("DELETE FROM posts WHERE local_id = ?").run(localId);
 }
 
+/** The shape CSV import builds; every row lands dirty so it joins the push queue. */
+export interface ImportedRow {
+    status: string;
+    title: string;
+    content: string;
+    authorId: number | null;
+    dateLocal: string;
+    termRefs: Record<string, string[]>;
+}
+
+/** All-or-nothing bulk create: one transaction writes every imported row (and its term refs). */
+export function importPosts(rows: ImportedRow[]): number[] {
+    const insertAll = db.transaction((list: ImportedRow[]): number[] => {
+        const ids: number[] = [];
+        for (const row of list) {
+            const localId = insertPost({
+                status: row.status,
+                title: row.title,
+                content: row.content,
+                authorId: row.authorId,
+                dateLocal: row.dateLocal,
+                dirty: true,
+                lastSyncedGmt: null,
+            });
+            if (Object.keys(row.termRefs).length > 0) {
+                setTermRefs(localId, row.termRefs);
+            }
+            ids.push(localId);
+        }
+        return ids;
+    });
+    return insertAll(rows);
+}
+
 /** Term references of one row: "81" = term id 81, "name:标签" = a term to create on push. */
 export function getTermRefs(localId: number): Record<string, string[]> {
     const rows = db.prepare("SELECT taxonomy, ref FROM post_terms WHERE local_id = ?").all(localId) as {
