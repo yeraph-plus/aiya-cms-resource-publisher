@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: AIYA CMS - Resource Post Publisher
+ * Plugin Name: AIYA CMS - Resource Publisher API
  * Description: REST API (aiya-publish/v1) for an external publishing tool to create and update resource posts, including the FileServe data field. Application password required; anonymous callers are rejected. Companion plugin of the local publisher tool — requires the AIYA CMS - Headless Core plugin, which registers the resource post type this API serves.
  * Version: 0.1.1
  * Requires at least: 6.5

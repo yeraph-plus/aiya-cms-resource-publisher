@@ -2,6 +2,8 @@
 
 本地发帖器：SQLite 为存储的表格化编辑界面，通过 `aiya-publish/v1` 与站点同步/推送 resource 帖子（含 `aiya_core_fileserve` 文件列表字段）。单进程本地 Web 应用，无外部服务依赖。
 
+> 配套仓库：站点后端与契约提供方 [`aiya-cms-core`](https://github.com/yeraph-plus/aiya-cms-core)（`aiya/core/v1` 契约、resource 类型与术语注册；未装它本工具无数据可同步）；公开前台见 [`aiya-cms-station`](https://github.com/yeraph-plus/aiya-cms-station)。
+
 ## 启动
 
 ```bash
