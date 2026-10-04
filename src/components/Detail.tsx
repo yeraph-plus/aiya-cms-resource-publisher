@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RowDTO, StateDTO } from "../types";
 import { TAXONOMY_LABELS, TAXONOMY_ORDER } from "../types";
-import { pushCompletion, saveRow, type RowPatch } from "../api";
+import { pushCompletion, ensureStagingDir, fetchStagingDir, openStagingDir, saveRow, type RowPatch } from "../api";
 import { mergeTermTokens, splitTermInput } from "../../shared/terms";
 import FileServeEditor from "./FileServeEditor";
 import { fieldLabel, groupMissingField, normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
@@ -164,6 +164,58 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
     const hasFileserve = listEntries.length > 0;
     const completion = row.completion;
 
+    // The staging folder (自动创建文件夹位置) is keyed by the site's post id;
+    // adding the first group triggers it, and the row shows its state.
+    const [staging, setStaging] = useState<{ dir: string | null; name: string | null } | null>(null);
+    useEffect(() => {
+        if (row.postId === null) {
+            setStaging(null);
+            return;
+        }
+        let alive = true;
+        void fetchStagingDir(row.localId)
+            .then((result) => {
+                if (alive) {
+                    setStaging(result);
+                }
+            })
+            .catch(() => {});
+        return () => {
+            alive = false;
+        };
+    }, [row.localId, row.postId]);
+
+    const triggerStaging = () => {
+        if (row.postId === null) {
+            return;
+        }
+        void ensureStagingDir(row.localId)
+            .then((result) => {
+                if (result.dir !== null) {
+                    setStaging({ dir: result.dir, name: result.name });
+                    if (result.status === "created" || result.status === "claimed") {
+                        notify("ok", `上传目录已就绪：${result.name}`);
+                    }
+                }
+            })
+            .catch(() => {
+                // Blocked states are logged server-side; nothing to say here.
+            });
+    };
+
+    const onOpenDir = () => {
+        void (async () => {
+            try {
+                const result = await openStagingDir(row.localId);
+                if (result.dir !== null) {
+                    setStaging({ dir: result.dir, name: result.name });
+                }
+            } catch (error) {
+                notify("err", String(error));
+            }
+        })();
+    };
+
     const onPushCompletion = () => {
         void (async () => {
             try {
@@ -318,32 +370,54 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
                 <span className="lbl">文件补完（网盘上传 · 分享链回填 · 补完推送）</span>
                 {row.postId === null ? (
                     <p className="text-xs text-neutral-400">这一行还没推送到站点；先推送发布，再补完文件列表。</p>
-                ) : !hasFileserve ? (
-                    <p className="text-xs text-neutral-400">在下方编辑器添加数据组；每组对应一个网盘分享。</p>
                 ) : (
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex flex-col gap-2">
                         <div className="flex flex-wrap items-center gap-2 text-xs">
-                            {listMissing.length > 0 ? (
-                                <span className="px-1.5 rounded bg-amber-100 text-amber-700">缺字段</span>
-                            ) : completion.status === "pushed" ? (
-                                <span className="px-1.5 rounded bg-green-100 text-green-700">与站点一致</span>
+                            <span className="text-neutral-500">上传目录</span>
+                            {staging?.name ? (
+                                <>
+                                    <span className="font-mono">{staging.name}</span>
+                                    <button className="btn" disabled={busy} onClick={onOpenDir}>
+                                        打开目录
+                                    </button>
+                                </>
                             ) : (
-                                <span className="px-1.5 rounded bg-blue-100 text-blue-700">待推送</span>
+                                <>
+                                    <span className="text-neutral-400">尚未创建</span>
+                                    <button className="btn" disabled={busy} onClick={onOpenDir}>
+                                        创建目录
+                                    </button>
+                                </>
                             )}
-                            <span className="text-neutral-400">{listEntries.length} 组</span>
                         </div>
-                        {listMissing.length > 0 && (
-                            <div className="text-xs text-amber-600">
-                                {listMissing.join("；")}——补完推送会整行拒绝，先填好再推。
+                        {!hasFileserve ? (
+                            <p className="text-xs text-neutral-400">在下方编辑器添加数据组；每组对应一个网盘分享。</p>
+                        ) : (
+                            <div className="flex flex-col gap-1.5">
+                                <div className="flex flex-wrap items-center gap-2 text-xs">
+                                    {listMissing.length > 0 ? (
+                                        <span className="px-1.5 rounded bg-amber-100 text-amber-700">缺字段</span>
+                                    ) : completion.status === "pushed" ? (
+                                        <span className="px-1.5 rounded bg-green-100 text-green-700">与站点一致</span>
+                                    ) : (
+                                        <span className="px-1.5 rounded bg-blue-100 text-blue-700">待推送</span>
+                                    )}
+                                    <span className="text-neutral-400">{listEntries.length} 组</span>
+                                </div>
+                                {listMissing.length > 0 && (
+                                    <div className="text-xs text-amber-600">
+                                        {listMissing.join("；")}——补完推送会整行拒绝，先填好再推。
+                                    </div>
+                                )}
+                                <button
+                                    className="btn btn-primary self-start"
+                                    disabled={busy || listMissing.length > 0}
+                                    onClick={onPushCompletion}
+                                >
+                                    补完推送此行
+                                </button>
                             </div>
                         )}
-                        <button
-                            className="btn btn-primary self-start"
-                            disabled={busy || listMissing.length > 0}
-                            onClick={onPushCompletion}
-                        >
-                            补完推送此行
-                        </button>
                     </div>
                 )}
             </div>
@@ -353,6 +427,7 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
                 <FileServeEditor
                     config={draft.fileserve}
                     onChange={(config) => update({ fileserve: config })}
+                    onGroupAdded={triggerStaging}
                 />
             </div>
 

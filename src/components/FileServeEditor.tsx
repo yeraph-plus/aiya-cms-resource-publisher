@@ -13,11 +13,13 @@ import {
 interface Props {
     config: FileServeConfig | null;
     onChange: (config: FileServeConfig | null) => void;
+    /** Fires whenever a brand-new group id is added — the staging-dir trigger. */
+    onGroupAdded?: () => void;
 }
 
 const ADAPTER_IDS = Object.keys(ADAPTER_FIELDS);
 
-export default function FileServeEditor({ config, onChange }: Props) {
+export default function FileServeEditor({ config, onChange, onGroupAdded }: Props) {
     const groups = config ?? {};
     const entries = Object.entries(groups).sort(([a], [b]) => Number(a) - Number(b));
 
@@ -28,6 +30,7 @@ export default function FileServeEditor({ config, onChange }: Props) {
     const addGroup = (): void => {
         const id = nextId(groups);
         commit({ ...groups, [id]: emptyGroup("platform") });
+        onGroupAdded?.();
     };
 
     const removeGroup = (id: string): void => {

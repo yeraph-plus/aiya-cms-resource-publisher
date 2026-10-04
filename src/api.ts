@@ -173,3 +173,24 @@ export interface CompletionOutcomeDTO {
 export function pushCompletion(localIds?: number[]): Promise<CompletionOutcomeDTO> {
     return call<CompletionOutcomeDTO>("/api/completion/push", "POST", { localIds });
 }
+
+export interface StagingDirDTO {
+    status: "existing" | "claimed" | "created" | "blocked";
+    dir: string | null;
+    name: string | null;
+    reason?: string;
+}
+
+/** Idempotent; answers status "blocked" (200) for expected conditions. */
+export function ensureStagingDir(localId: number): Promise<StagingDirDTO> {
+    return call<StagingDirDTO>("/api/fileserve-dir/ensure", "POST", { localId });
+}
+
+/** Ensures first, then opens the folder in the file manager. */
+export function openStagingDir(localId: number): Promise<StagingDirDTO> {
+    return call<StagingDirDTO>("/api/fileserve-dir/open", "POST", { localId });
+}
+
+export function fetchStagingDir(localId: number): Promise<{ dir: string | null; name: string | null }> {
+    return call<{ dir: string | null; name: string | null }>(`/api/fileserve-dir/${localId}`, "GET");
+}

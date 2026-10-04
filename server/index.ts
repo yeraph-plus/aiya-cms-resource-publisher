@@ -9,6 +9,7 @@ import {
     deletePost,
     getPost,
     getSettings,
+    getStagingDir,
     getTermRefs,
     importPosts,
     insertPost,
@@ -26,6 +27,7 @@ import {
 import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
 import { completionState, runCompletionPush } from "./completion.js";
+import { ensureStagingDir, openStagingDir } from "./dirs.js";
 import { isOurStateEndpoint, killTree, listenerPid } from "./portguard.js";
 import { getProgress, setProgress } from "./progress.js";
 import { normalizeSiteUrl, ping, WpError } from "./wp.js";
@@ -408,6 +410,47 @@ function errorMessage(error: unknown): string {
     });
 
     app.get("/api/progress", async () => getProgress());
+
+    // --- Upload staging directories (自动创建文件夹) -------------------------
+    // A blocked ensure is an expected condition (unpublished row, unconfigured
+    // root), so ensure answers 200 with status "blocked" — the fire-and-forget
+    // trigger must not surface as a failed request; open answers 400 so a
+    // clicked button shows the reason.
+
+    app.post("/api/fileserve-dir/ensure", async (request, reply) => {
+        const body = (request.body ?? {}) as { localId?: unknown };
+        const localId = Number(body.localId);
+        if (!Number.isInteger(localId) || localId <= 0) {
+            return reply.code(400).send({ error: "缺少 localId。" });
+        }
+        return ensureStagingDir(localId);
+    });
+
+    app.post("/api/fileserve-dir/open", async (request, reply) => {
+        const body = (request.body ?? {}) as { localId?: unknown };
+        const localId = Number(body.localId);
+        if (!Number.isInteger(localId) || localId <= 0) {
+            return reply.code(400).send({ error: "缺少 localId。" });
+        }
+        const result = openStagingDir(localId);
+        if (result.status === "blocked") {
+            return reply.code(400).send({ error: result.reason });
+        }
+        return result;
+    });
+
+    app.get("/api/fileserve-dir/:localId", async (request, reply) => {
+        const localId = Number((request.params as { localId: string }).localId);
+        const row = getPost(localId);
+        if (!row) {
+            return reply.code(404).send({ error: "本地行不存在。" });
+        }
+        if (row.postId === null) {
+            return { dir: null, name: null };
+        }
+        const recorded = getStagingDir(row.postId);
+        return { dir: recorded?.dir ?? null, name: recorded?.name ?? null };
+    });
 
     // The operational log: the client polls incrementally by id, so a full
     // reload hands it the newest window and a running client only the delta.
