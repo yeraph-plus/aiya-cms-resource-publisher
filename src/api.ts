@@ -1,4 +1,4 @@
-import type { RowDTO, StateDTO } from "./types";
+import type { RowDTO, ScanSinksDTO, SinkDTO, StateDTO } from "./types";
 
 async function json<T>(response: Response): Promise<T> {
     if (!response.ok) {
@@ -56,6 +56,9 @@ export interface SaveSettingsPayload {
     appPassword?: string;
     proxyUrl?: string;
     defaultAuthorId?: number | null;
+    workRoot?: string;
+    dirNameMode?: string;
+    fileserveTemplate?: string | null;
 }
 
 export function saveSettings(payload: SaveSettingsPayload): Promise<{ ok: boolean }> {
@@ -149,4 +152,35 @@ export interface ProgressDTO {
 /** Snapshot of the running pull/push; null when the tool is idle. */
 export function fetchProgress(): Promise<ProgressDTO | null> {
     return call<ProgressDTO | null>("/api/progress", "GET");
+}
+
+export interface GenerateSinkDTO {
+    ok: boolean;
+    dirName: string;
+    path: string;
+}
+
+export function generateSink(localId: number): Promise<GenerateSinkDTO> {
+    return call<GenerateSinkDTO>("/api/fileserve-sink/generate", "POST", { localId });
+}
+
+export function scanSinks(localId?: number): Promise<ScanSinksDTO> {
+    const query = localId !== undefined ? `?localId=${localId}` : "";
+    return call<ScanSinksDTO>(`/api/fileserve-sink/scan${query}`, "GET");
+}
+
+export interface CompletionOutcomeDTO {
+    ok: boolean;
+    error: string | null;
+    pushed: number;
+    failed: number;
+    errors: { dirName: string; title: string; message: string }[];
+}
+
+export function pushCompletion(dirNames?: string[]): Promise<CompletionOutcomeDTO> {
+    return call<CompletionOutcomeDTO>("/api/fileserve-sink/push", "POST", { dirNames });
+}
+
+export function openSinkDir(dirName: string): Promise<{ ok: boolean }> {
+    return call<{ ok: boolean }>("/api/fileserve-sink/open", "POST", { dirName });
 }

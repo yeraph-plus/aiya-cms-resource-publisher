@@ -10,6 +10,7 @@ import {
 } from "./db.js";
 import {
     createResource,
+    parseSlugFromLink,
     updateResource,
     WpError,
     type WpItem,
@@ -76,6 +77,7 @@ function applyResponse(row: PostRow, item: WpItem): void {
         dateGmt: state.dateGmt,
         modifiedGmt: state.modifiedGmt,
         fileserve: remoteFileserve,
+        slug: parseSlugFromLink(item.link),
         dirty: false,
         conflict: false,
         missing: false,

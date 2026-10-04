@@ -14,6 +14,9 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
     const [appPassword, setAppPassword] = useState("");
     const [proxyUrl, setProxyUrl] = useState(state.settings.proxyUrl);
     const [defaultAuthorId, setDefaultAuthorId] = useState<number | null>(state.settings.defaultAuthorId);
+    const [workRoot, setWorkRoot] = useState(state.settings.workRoot);
+    const [dirNameMode, setDirNameMode] = useState(state.settings.dirNameMode);
+    const [fileserveTemplate, setFileserveTemplate] = useState(state.settings.fileserveTemplate ?? "");
     const [busy, setBusy] = useState(false);
 
     useEffect(() => {
@@ -32,9 +35,20 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
         ...(appPassword.trim() !== "" ? { appPassword: appPassword.trim() } : {}),
         proxyUrl,
         defaultAuthorId,
+        workRoot,
+        dirNameMode,
+        fileserveTemplate: fileserveTemplate.trim() === "" ? null : fileserveTemplate,
     });
 
     const save = async () => {
+        if (fileserveTemplate.trim() !== "") {
+            try {
+                JSON.parse(fileserveTemplate);
+            } catch {
+                await onSaved({ kind: "err", text: "组模板不是可读的 JSON。" });
+                return;
+            }
+        }
         setBusy(true);
         try {
             await api.saveSettings(typedValues());
@@ -121,6 +135,29 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
                             </option>
                         ))}
                     </select>
+
+                    <label className="text-right text-neutral-500">补完工作目录</label>
+                    <input
+                        value={workRoot}
+                        onChange={(event) => setWorkRoot(event.target.value)}
+                        placeholder="文件补完的根目录，如 D:\\网盘发布（可空 = 不启用补完流程）"
+                    />
+
+                    <label className="text-right text-neutral-500">目录命名</label>
+                    <select value={dirNameMode} onChange={(event) => setDirNameMode(event.target.value)}>
+                        <option value="id">文章 ID（推荐，最稳）</option>
+                        <option value="id-slug">ID-slug（ID-别名，更易读）</option>
+                        <option value="slug">文章别名（需站点 slug 为 ASCII）</option>
+                    </select>
+
+                    <label className="text-right text-neutral-500 self-start pt-1">补完组模板</label>
+                    <textarea
+                        className="font-mono text-xs leading-5"
+                        rows={4}
+                        value={fileserveTemplate}
+                        onChange={(event) => setFileserveTemplate(event.target.value)}
+                        placeholder={'留空 = 默认（百度网盘 + 夸克网盘，价格 0）。JSON 数组，如：\n[{"netdisk":"baidu","title":"百度网盘","price":2},{"netdisk":"quark","title":"夸克网盘","price":0}]'}
+                    />
                 </div>
 
                 <div className="px-5 pb-5">

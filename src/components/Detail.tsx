@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { RowDTO, StateDTO } from "../types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RowDTO, SinkDTO, StateDTO } from "../types";
 import { TAXONOMY_LABELS, TAXONOMY_ORDER } from "../types";
-import { saveRow, type RowPatch } from "../api";
+import { generateSink, openSinkDir, pushCompletion, saveRow, scanSinks, type RowPatch } from "../api";
 import { mergeTermTokens, splitTermInput } from "../../shared/terms";
 import FileServeEditor from "./FileServeEditor";
 import { normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
@@ -9,6 +9,7 @@ import { normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
 interface Props {
     row: RowDTO;
     state: StateDTO;
+    busy: boolean;
     onEdit: () => void;
     notify: (kind: "ok" | "err", text: string) => void;
 }
@@ -28,7 +29,7 @@ interface Draft {
     fileserve: FileServeConfig | null;
 }
 
-export default function Detail({ row, state, onEdit, notify }: Props) {
+export default function Detail({ row, state, busy, onEdit, notify }: Props) {
     const draftFromRow = (source: RowDTO): Draft => ({
         status: source.status,
         title: source.title,
@@ -148,6 +149,87 @@ export default function Detail({ row, state, onEdit, notify }: Props) {
         }
         const found = termOptions(taxonomy).find((option) => option.id === Number(ref));
         return found ? found.name : `#${ref}`;
+    };
+
+    // --- 文件补完（completion sink）---------------------------------------
+    // One skeleton per row lives in the settings' work root; the carrier is
+    // filled offline (upload + share links) and pushed as fileserve-only.
+    const [sink, setSink] = useState<SinkDTO | null>(null);
+    const [workRoot, setWorkRoot] = useState<string>("");
+    const loadSink = useCallback(async () => {
+        try {
+            const result = await scanSinks(row.localId);
+            setWorkRoot(result.workRoot);
+            setSink(result.sinks[0] ?? null);
+        } catch {
+            setSink(null);
+        }
+    }, [row.localId]);
+    useEffect(() => {
+        void loadSink();
+    }, [loadSink]);
+
+    const hasFileserve = draft.fileserve !== null && Object.keys(draft.fileserve).length > 0;
+
+    const onGenerateSink = () => {
+        void (async () => {
+            try {
+                const result = await generateSink(row.localId);
+                notify("ok", `骨架已生成：${result.dirName}`);
+                await loadSink();
+                onEdit();
+            } catch (error) {
+                notify("err", String(error));
+            }
+        })();
+    };
+
+    const onOpenSinkDir = () => {
+        if (!sink) {
+            return;
+        }
+        void (async () => {
+            try {
+                await openSinkDir(sink.dirName);
+            } catch (error) {
+                notify("err", String(error));
+            }
+        })();
+    };
+
+    const onPushSink = () => {
+        if (!sink) {
+            return;
+        }
+        void (async () => {
+            try {
+                const outcome = await pushCompletion([sink.dirName]);
+                if (outcome.error) {
+                    notify("err", `补完推送失败：${outcome.error}`);
+                } else if (outcome.failed > 0) {
+                    notify("err", `补完推送：成功 ${outcome.pushed}，失败 ${outcome.failed}（${outcome.errors[0]?.message ?? ""}）`);
+                } else {
+                    notify("ok", `补完推送：文件列表已写入站点（${outcome.pushed} 条）`);
+                }
+                await loadSink();
+                onEdit();
+            } catch (error) {
+                notify("err", String(error));
+            }
+        })();
+    };
+
+    const sinkBadge = (status: SinkDTO["status"]): { label: string; className: string } => {
+        switch (status) {
+            case "ready":
+                return { label: "待推送", className: "bg-blue-100 text-blue-700" };
+            case "pushed":
+                return { label: "已推送", className: "bg-green-100 text-green-700" };
+            case "broken":
+                return { label: "载体损坏", className: "bg-red-100 text-red-700" };
+            default:
+                return { label: "待分享", className: "bg-neutral-100 text-neutral-600" };
+        }
     };
 
     const badges = [
@@ -279,6 +361,49 @@ export default function Detail({ row, state, onEdit, notify }: Props) {
                     onChange={(event) => update({ content: event.target.value })}
                 />
             </label>
+
+            <div>
+                <span className="lbl">文件补完（先发帖 · 网盘上传 · 分享链回填 · 异批推送）</span>
+                {row.postId === null ? (
+                    <p className="text-xs text-neutral-400">这一行还没推送到站点；先推送发布，再生成文件骨架。</p>
+                ) : hasFileserve ? (
+                    <p className="text-xs text-neutral-400">这一行已有文件列表，直接在下方编辑器维护；补完骨架只服务空文件列表的行。</p>
+                ) : workRoot === "" ? (
+                    <p className="text-xs text-neutral-400">先在设置里填好补完工作目录。</p>
+                ) : sink ? (
+                    <div className="flex flex-col gap-1.5">
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className={`px-1.5 rounded ${sinkBadge(sink.status).className}`}>{sinkBadge(sink.status).label}</span>
+                            <span className="font-mono">{sink.dirName}</span>
+                            {sink.carrier && (
+                                <span className="text-neutral-400">
+                                    {sink.carrier.groupsReady}/{sink.carrier.groupsTotal} 组有链接
+                                </span>
+                            )}
+                        </div>
+                        {sink.error && <div className="text-xs text-red-500">{sink.error}</div>}
+                        <div className="flex gap-2">
+                            <button className="btn" disabled={busy} onClick={onOpenSinkDir}>
+                                打开目录
+                            </button>
+                            {sink.status === "ready" && (
+                                <button className="btn btn-primary" disabled={busy} onClick={onPushSink}>
+                                    补完推送此条
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                ) : (
+                    <div className="flex flex-col gap-1.5">
+                        <button className="btn self-start" disabled={busy} onClick={onGenerateSink}>
+                            生成文件骨架
+                        </button>
+                        <p className="text-xs text-neutral-400">
+                            在工作目录下创建以文章命名的上传目录和 fileserve.json 载体；网盘上传并把分享链填回载体后，用「补完推送」写入站点。
+                        </p>
+                    </div>
+                )}
+            </div>
 
             <div>
                 <span className="lbl">文件列表（aiya_core_fileserve）</span>

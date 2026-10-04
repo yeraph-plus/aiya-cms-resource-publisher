@@ -7,6 +7,9 @@ export interface SettingsDTO {
     proxyUrl: string;
     defaultAuthorId: number | null;
     lastSyncCursor: string | null;
+    workRoot: string;
+    dirNameMode: string;
+    fileserveTemplate: string | null;
 }
 
 export interface AuthorDTO {
@@ -47,6 +50,26 @@ export interface StateDTO {
     authors: AuthorDTO[];
     terms: Record<string, TermInfo[]>;
     posts: RowDTO[];
+}
+
+/** One completion sink (文件骨架): a working directory with its carrier. */
+export interface SinkDTO {
+    dirName: string;
+    path: string;
+    status: "draft" | "ready" | "pushed" | "broken";
+    error: string | null;
+    carrier: {
+        localId: number;
+        postId: number;
+        slug: string | null;
+        groupsTotal: number;
+        groupsReady: number;
+    } | null;
+}
+
+export interface ScanSinksDTO {
+    workRoot: string;
+    sinks: SinkDTO[];
 }
 
 export { TAXONOMY_ORDER, TAXONOMY_LABELS } from "../shared/import";

@@ -12,7 +12,7 @@ import {
     upsertAuthor,
     type PostRow,
 } from "./db.js";
-import { listResources, ping, taxonomies, users, WpError, type WpItem } from "./wp.js";
+import { listResources, parseSlugFromLink, ping, taxonomies, users, WpError, type WpItem } from "./wp.js";
 import { setProgress } from "./progress.js";
 
 export interface SyncOutcome {
@@ -57,6 +57,7 @@ function remoteToState(item: WpItem): {
     dateGmt: string;
     modifiedGmt: string;
     fileserve: string | null;
+    slug: string | null;
     termRefs: Record<string, string[]>;
 } {
     const termRefs: Record<string, string[]> = {};
@@ -72,6 +73,7 @@ function remoteToState(item: WpItem): {
         dateGmt: item.dateGmt,
         modifiedGmt: item.modifiedGmt,
         fileserve: item.fileserve ? JSON.stringify(item.fileserve) : null,
+        slug: parseSlugFromLink(item.link),
         termRefs,
     };
 }
@@ -92,6 +94,7 @@ function mergeRemote(item: WpItem, outcome: SyncOutcome): void {
             dateGmt: remote.dateGmt,
             modifiedGmt: remote.modifiedGmt,
             fileserve: remote.fileserve,
+            slug: remote.slug,
             dirty: false,
             conflict: false,
             missing: false,
@@ -105,14 +108,15 @@ function mergeRemote(item: WpItem, outcome: SyncOutcome): void {
 
     if (existing.dirty) {
         // Local edits win; only flag the conflict when the online post moved
-        // past the version this row was based on.
+        // past the version this row was based on. The slug is not an editable
+        // field, so it backfills even on dirty rows.
         const snapshot = parseSnapshot(existing.snapshot);
         if (snapshot && remote.modifiedGmt > snapshot.modifiedGmt) {
-            updatePostRow(existing.localId, { conflict: true, missing: false, lastSyncedGmt: now() });
+            updatePostRow(existing.localId, { slug: remote.slug, conflict: true, missing: false, lastSyncedGmt: now() });
             outcome.conflicts += 1;
             return;
         }
-        updatePostRow(existing.localId, { missing: false, lastSyncedGmt: now() });
+        updatePostRow(existing.localId, { slug: remote.slug, missing: false, lastSyncedGmt: now() });
         outcome.refreshed += 1;
         return;
     }
@@ -126,6 +130,7 @@ function mergeRemote(item: WpItem, outcome: SyncOutcome): void {
         dateGmt: remote.dateGmt,
         modifiedGmt: remote.modifiedGmt,
         fileserve: remote.fileserve,
+        slug: remote.slug,
         dirty: false,
         conflict: false,
         missing: false,

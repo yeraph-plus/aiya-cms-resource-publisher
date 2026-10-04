@@ -224,3 +224,32 @@ export async function createResource(creds: WpCreds, payload: PushPayload): Prom
 export async function updateResource(creds: WpCreds, postId: number, payload: PushPayload): Promise<WpItem> {
     return request<WpItem>(creds, "PUT", `/resource/${postId}`, payload);
 }
+
+/**
+ * The completion push updates ONLY the file list: a partial PUT — the site
+ * writes the fields it receives and leaves everything else untouched, so the
+ * post body, terms and author the tool last saw never ride along.
+ */
+export async function updateResourceFileserve(creds: WpCreds, postId: number, fileserve: unknown): Promise<WpItem> {
+    return request<WpItem>(creds, "PUT", `/resource/${postId}`, { fileserve });
+}
+
+export async function getResource(creds: WpCreds, postId: number): Promise<WpItem> {
+    return request<WpItem>(creds, "GET", `/resource/${postId}`);
+}
+
+/**
+ * The resource permalink's last path segment is the slug. Plain permalinks
+ * (?p=123) carry no slug segment and answer null; percent-encoded CJK slugs
+ * come back decoded (the dir-name safety check rejects them anyway).
+ */
+export function parseSlugFromLink(link: string): string | null {
+    try {
+        const url = new URL(link);
+        const segments = url.pathname.split("/").filter((segment) => segment !== "");
+        const last = segments[segments.length - 1];
+        return last ? decodeURIComponent(last) : null;
+    } catch {
+        return null;
+    }
+}

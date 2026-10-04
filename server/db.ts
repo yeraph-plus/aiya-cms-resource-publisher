@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS posts (
     date_gmt TEXT NOT NULL DEFAULT '',
     modified_gmt TEXT NOT NULL DEFAULT '',
     fileserve TEXT,
+    slug TEXT,
     dirty INTEGER NOT NULL DEFAULT 0,
     conflict INTEGER NOT NULL DEFAULT 0,
     missing INTEGER NOT NULL DEFAULT 0,
@@ -55,6 +56,13 @@ CREATE TABLE IF NOT EXISTS post_terms (
     PRIMARY KEY (local_id, taxonomy, ref)
 );
 `);
+
+// Databases created before the completion flow lack the slug column; the
+// guarded ALTER is the whole migration.
+const postColumns = (db.pragma("table_info(posts)") as { name: string }[]).map((column) => column.name);
+if (!postColumns.includes("slug")) {
+    db.exec("ALTER TABLE posts ADD COLUMN slug TEXT");
+}
 
 export function getSetting(key: string): string | null {
     const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string | null } | undefined;
@@ -74,6 +82,12 @@ export interface SettingsShape {
     proxyUrl: string;
     defaultAuthorId: number | null;
     lastSyncCursor: string | null;
+    /** Root of the completion flow's working directories; "" = unset. */
+    workRoot: string;
+    /** How a sink directory is named: post id, id-slug pair or bare slug. */
+    dirNameMode: string;
+    /** Raw JSON of the default group template; null = built-in default. */
+    fileserveTemplate: string | null;
 }
 
 export function getSettings(): SettingsShape {
@@ -84,6 +98,9 @@ export function getSettings(): SettingsShape {
         proxyUrl: getSetting("proxyUrl") ?? "",
         defaultAuthorId: getSetting("defaultAuthorId") ? Number(getSetting("defaultAuthorId")) : null,
         lastSyncCursor: getSetting("lastSyncCursor"),
+        workRoot: getSetting("workRoot") ?? "",
+        dirNameMode: getSetting("dirNameMode") ?? "id",
+        fileserveTemplate: getSetting("fileserveTemplate"),
     };
 }
 
@@ -98,6 +115,8 @@ export interface PostRow {
     dateGmt: string;
     modifiedGmt: string;
     fileserve: string | null;
+    /** The permalink's last segment, captured from sync/push responses. */
+    slug: string | null;
     dirty: boolean;
     conflict: boolean;
     missing: boolean;
@@ -118,6 +137,7 @@ interface PostDbRow {
     date_gmt: string;
     modified_gmt: string;
     fileserve: string | null;
+    slug: string | null;
     dirty: number;
     conflict: number;
     missing: number;
@@ -139,6 +159,7 @@ function fromDb(row: PostDbRow): PostRow {
         dateGmt: row.date_gmt,
         modifiedGmt: row.modified_gmt,
         fileserve: row.fileserve,
+        slug: row.slug,
         dirty: row.dirty === 1,
         conflict: row.conflict === 1,
         missing: row.missing === 1,
@@ -150,7 +171,7 @@ function fromDb(row: PostDbRow): PostRow {
 }
 
 const POST_FIELDS = `local_id, post_id, status, title, content, author_id, date_local, date_gmt,
-    modified_gmt, fileserve, dirty, conflict, missing, last_synced_gmt, last_pushed_gmt, last_error, snapshot`;
+    modified_gmt, fileserve, slug, dirty, conflict, missing, last_synced_gmt, last_pushed_gmt, last_error, snapshot`;
 
 export function listPosts(): PostRow[] {
     const rows = db.prepare(`SELECT ${POST_FIELDS} FROM posts ORDER BY local_id`).all() as PostDbRow[];
@@ -196,6 +217,7 @@ export interface PostPatch {
     dateGmt?: string;
     modifiedGmt?: string;
     fileserve?: string | null;
+    slug?: string | null;
     dirty?: boolean;
     conflict?: boolean;
     missing?: boolean;
@@ -215,6 +237,7 @@ const COLUMN_OF: Record<string, string> = {
     dateGmt: "date_gmt",
     modifiedGmt: "modified_gmt",
     fileserve: "fileserve",
+    slug: "slug",
     dirty: "dirty",
     conflict: "conflict",
     missing: "missing",
