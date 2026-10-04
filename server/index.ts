@@ -9,7 +9,6 @@ import {
     deletePost,
     getPost,
     getSettings,
-    getStagingDir,
     getTermRefs,
     importPosts,
     insertPost,
@@ -27,7 +26,7 @@ import {
 import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
 import { completionState } from "./completion.js";
-import { ensureStagingDir, openStagingDir } from "./dirs.js";
+import { ensureStagingDir, findStagingDir, openStagingDir } from "./dirs.js";
 import { isOurStateEndpoint, killTree, listenerPid } from "./portguard.js";
 import { getProgress, setProgress } from "./progress.js";
 import { normalizeSiteUrl, ping, WpError } from "./wp.js";
@@ -427,8 +426,8 @@ function errorMessage(error: unknown): string {
         if (row.postId === null) {
             return { dir: null, name: null };
         }
-        const recorded = getStagingDir(row.postId);
-        return { dir: recorded?.dir ?? null, name: recorded?.name ?? null };
+        const found = findStagingDir(row.postId);
+        return { dir: found?.dir ?? null, name: found?.name ?? null };
     });
 
     // The operational log: the client polls incrementally by id, so a full

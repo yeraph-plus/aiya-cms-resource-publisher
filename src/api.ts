@@ -162,7 +162,7 @@ export function clearLogs(): Promise<{ ok: boolean; cleared: number }> {
 }
 
 export interface StagingDirDTO {
-    status: "existing" | "claimed" | "created" | "blocked";
+    status: "claimed" | "created" | "blocked";
     dir: string | null;
     name: string | null;
     reason?: string;

@@ -33,7 +33,6 @@ afterAll(async () => {
 
 beforeEach(() => {
     db.db.exec("DELETE FROM posts");
-    db.db.exec("DELETE FROM fileserve_dirs");
     workRoot = mkdtempSync(join(tmpdir(), "publisher-dirs-root-"));
     db.setSetting("workRoot", workRoot);
 });
@@ -58,7 +57,7 @@ describe("staging dir naming", () => {
 });
 
 describe("staging dir ensure", () => {
-    it("creates the folder, records it, and is idempotent", async () => {
+    it("creates the folder on first call and claims it on every later one", async () => {
         const localId = db.insertPost({ status: "publish", title: "测试 文章", postId: 501 });
 
         const res = await app.inject({ method: "POST", url: "/api/fileserve-dir/ensure", payload: { localId } });
@@ -67,15 +66,16 @@ describe("staging dir ensure", () => {
         expect(body.name).toBe("501-测试 文章");
         expect(existsSync(join(workRoot, "501-测试 文章"))).toBe(true);
 
+        const again = await app.inject({ method: "POST", url: "/api/fileserve-dir/ensure", payload: { localId } });
+        expect(again.json().status).toBe("claimed");
+        expect(again.json().name).toBe("501-测试 文章");
+
+        // The lookup endpoint reads the filesystem, nothing else.
         const info = await app.inject({ method: "GET", url: `/api/fileserve-dir/${localId}` });
         expect(info.json().name).toBe("501-测试 文章");
-
-        const again = await app.inject({ method: "POST", url: "/api/fileserve-dir/ensure", payload: { localId } });
-        expect(again.json().status).toBe("existing");
-        expect(db.db.prepare("SELECT COUNT(*) AS n FROM fileserve_dirs").get()).toEqual({ n: 1 });
     });
 
-    it("claims an existing folder by its leading id, and only the exact id", async () => {
+    it("claims a folder by its leading id, and only the exact id", async () => {
         const localId = db.insertPost({ status: "publish", title: "测试 文章", postId: 502 });
         mkdirSync(join(workRoot, "502-renamed-by-hand"));
         // A longer id sharing the digit prefix must not be claimed: the dash
@@ -86,7 +86,6 @@ describe("staging dir ensure", () => {
         const body = res.json();
         expect(body.status).toBe("claimed");
         expect(body.name).toBe("502-renamed-by-hand");
-        expect(db.db.prepare("SELECT name FROM fileserve_dirs").get()).toEqual({ name: "502-renamed-by-hand" });
     });
 
     it("blocks unpublished rows and an unconfigured root without touching disk", async () => {
@@ -103,12 +102,22 @@ describe("staging dir ensure", () => {
         expect(existsSync(join(workRoot, "503-行"))).toBe(false);
     });
 
-    it("drops the association when the local row is deleted, and the folder stays", async () => {
+    it("records nothing: deleting the row leaves the folder and no trace in the db", async () => {
         const localId = db.insertPost({ status: "publish", title: "行", postId: 504 });
         await app.inject({ method: "POST", url: "/api/fileserve-dir/ensure", payload: { localId } });
         await app.inject({ method: "DELETE", url: `/api/posts/${localId}` });
-        expect(db.db.prepare("SELECT COUNT(*) AS n FROM fileserve_dirs").get()).toEqual({ n: 0 });
         expect(existsSync(join(workRoot, "504-行"))).toBe(true);
+        // The staging dirs are not modelled in SQL at all — no table to hold
+        // them means nothing can go stale.
+        const tables = (db.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map(
+            (entry) => entry.name,
+        );
+        expect(tables).not.toContain("fileserve_dirs");
+
+        // A future row for the same post id claims the folder by prefix.
+        const again = db.insertPost({ status: "publish", title: "行", postId: 504 });
+        const res = await app.inject({ method: "POST", url: "/api/fileserve-dir/ensure", payload: { localId: again } });
+        expect(res.json()).toMatchObject({ status: "claimed", name: "504-行" });
     });
 
     it("answers 400 on open when the prerequisites are missing", async () => {

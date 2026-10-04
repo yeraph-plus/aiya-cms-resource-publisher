@@ -64,12 +64,6 @@ CREATE TABLE IF NOT EXISTS logs (
     ref INTEGER,
     message TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS fileserve_dirs (
-    post_id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    dir TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
 `);
 
 // Databases from before the completion flow / digest baseline lack these
@@ -308,36 +302,7 @@ export function updatePostRow(localId: number, patch: PostPatch): void {
 }
 
 export function deletePost(localId: number): void {
-    const row = getPost(localId);
-    if (row?.postId != null) {
-        // The staging-dir association interlocks with the post id; the
-        // folder itself on disk is the user's and stays.
-        db.prepare("DELETE FROM fileserve_dirs WHERE post_id = ?").run(row.postId);
-    }
     db.prepare("DELETE FROM posts WHERE local_id = ?").run(localId);
-}
-
-// --- 上传暂存目录关联 -------------------------------------------------------
-// One row per post, keyed by the site's post id — the interlock with posts.
-
-export interface StagingDirRow {
-    postId: number;
-    name: string;
-    dir: string;
-    createdAt: string;
-}
-
-export function getStagingDir(postId: number): StagingDirRow | undefined {
-    return db
-        .prepare("SELECT post_id AS postId, name, dir, created_at AS createdAt FROM fileserve_dirs WHERE post_id = ?")
-        .get(postId) as StagingDirRow | undefined;
-}
-
-export function upsertStagingDir(postId: number, name: string, dir: string): void {
-    db.prepare(
-        "INSERT INTO fileserve_dirs (post_id, name, dir, created_at) VALUES (?, ?, ?, ?) " +
-            "ON CONFLICT(post_id) DO UPDATE SET name = excluded.name, dir = excluded.dir",
-    ).run(postId, name, dir, new Date().toISOString());
 }
 
 /** The shape CSV import builds; every row lands dirty so it joins the push queue. */

@@ -1,15 +1,16 @@
 /**
  * Upload staging directories: one folder per post under the configured root
- * (自动创建文件夹位置), named `{postId}-{sanitized title}`. The association
- * lives in fileserve_dirs, interlocked with the posts row by the post id;
- * the leading id is the only load-bearing part of a folder name, so manual
- * renames and title truncation never break the link.
+ * (自动创建文件夹位置), named `{postId}-{sanitized title}`. Nothing is
+ * recorded — the leading post id is the only load-bearing part of a folder
+ * name, so the filesystem itself is the source of truth: every ensure/open
+ * scans the root, claims a folder already carrying the id (manual renames
+ * and title edits never break the link) and otherwise creates one.
  */
 
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { getPost, getSetting, getStagingDir, logEvent, upsertStagingDir } from "./db.js";
+import { getPost, getSetting, logEvent } from "./db.js";
 
 /** Whole-name budget in code points — well under the filesystem's 255-char
  * cap and comfortable inside MAX_PATH with any sane root. */
@@ -31,7 +32,7 @@ export function stagingDirName(postId: number, title: string): string {
 }
 
 export interface EnsureResult {
-    status: "existing" | "claimed" | "created" | "blocked";
+    status: "claimed" | "created" | "blocked";
     dir: string | null;
     name: string | null;
     reason?: string;
@@ -41,10 +42,26 @@ function blocked(reason: string): EnsureResult {
     return { status: "blocked", dir: null, name: null, reason };
 }
 
+/** The existing folder carrying the post's id, or null. The dash delimiter
+ * keeps id 50 from claiming 501's folder; the scan is sorted so a copied
+ * folder pair resolves deterministically. */
+export function findStagingDir(postId: number): { dir: string; name: string } | null {
+    const workRoot = (getSetting("workRoot") ?? "").trim();
+    if (workRoot === "" || !existsSync(workRoot)) {
+        return null;
+    }
+    const plain = String(postId);
+    const prefix = `${plain}-`;
+    const match = readdirSync(workRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && (entry.name === plain || entry.name.startsWith(prefix)))
+        .map((entry) => entry.name)
+        .sort()[0];
+    return match ? { dir: join(workRoot, match), name: match } : null;
+}
+
 /**
- * Idempotent: a recorded association returns its folder (recreated if the
- * user removed it), a folder already carrying the post's id is claimed, and
- * only otherwise is a new folder created. Unpublished rows and an
+ * Idempotent and stateless: a folder already carrying the post's id is
+ * claimed, only otherwise is a new folder created. Unpublished rows and an
  * unconfigured root are expected conditions, not errors.
  */
 export function ensureStagingDir(localId: number): EnsureResult {
@@ -57,39 +74,19 @@ export function ensureStagingDir(localId: number): EnsureResult {
     }
     const workRoot = (getSetting("workRoot") ?? "").trim();
     if (workRoot === "") {
-        logEvent("warn", "目录", `#${row.postId} 需要上传目录，但「自动创建文件夹位置」还没配置`, row.postId);
+        logEvent("warn", "目录", `#${row.postId} 需要本地目录，但「自动创建文件夹位置」还没配置`, row.postId);
         return blocked("先在设置里填好自动创建文件夹位置。");
     }
 
-    const recorded = getStagingDir(row.postId);
-    if (recorded) {
-        if (!existsSync(recorded.dir)) {
-            mkdirSync(recorded.dir, { recursive: true });
-        }
-        return { status: "existing", dir: recorded.dir, name: recorded.name };
-    }
-
-    // Read by leading id only: a folder the user already made (or renamed)
-    // wins over a freshly minted name. The dash delimiter keeps id 50 from
-    // claiming 501's folder.
-    if (existsSync(workRoot)) {
-        const plain = String(row.postId);
-        const prefix = `${plain}-`;
-        for (const entry of readdirSync(workRoot, { withFileTypes: true })) {
-            if (entry.isDirectory() && (entry.name === plain || entry.name.startsWith(prefix))) {
-                const dir = join(workRoot, entry.name);
-                upsertStagingDir(row.postId, entry.name, dir);
-                logEvent("info", "目录", `#${row.postId} 认领已有目录：${entry.name}`, row.postId);
-                return { status: "claimed", dir, name: entry.name };
-            }
-        }
+    const existing = findStagingDir(row.postId);
+    if (existing) {
+        return { status: "claimed", dir: existing.dir, name: existing.name };
     }
 
     const name = stagingDirName(row.postId, row.title);
     const dir = join(workRoot, name);
     mkdirSync(dir, { recursive: true });
-    upsertStagingDir(row.postId, name, dir);
-    logEvent("info", "目录", `#${row.postId} 已创建上传目录：${name}`, row.postId);
+    logEvent("info", "目录", `#${row.postId} 已创建本地目录：${name}`, row.postId);
     return { status: "created", dir, name };
 }
 
