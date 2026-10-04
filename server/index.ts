@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
@@ -26,6 +26,7 @@ import {
 import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
 import { fileServeState } from "./fileserveState.js";
+import { applyResult, buildQueue } from "./netdisklane.js";
 import { ensureStagingDir, findStagingDir, openStagingDir } from "./dirs.js";
 import { isOurStateEndpoint, killTree, listenerPid } from "./portguard.js";
 import { getProgress, setProgress } from "./progress.js";
@@ -431,6 +432,49 @@ function errorMessage(error: unknown): string {
         }
         const found = findStagingDir(row.postId);
         return { dir: found?.dir ?? null, name: found?.name ?? null };
+    });
+
+    // --- Netdisk share lane (网盘分享回填) -----------------------------------
+    // The userscript on pan.baidu.com polls the queue and posts share links
+    // back. CORS is pinned to the netdisk origin: the page's own fetch needs
+    // it, and pinning keeps every other site blind to the local tool.
+    const NETDISK_ORIGIN = "https://pan.baidu.com";
+    const netdiskCors = (reply: FastifyReply): void => {
+        reply.header("Access-Control-Allow-Origin", NETDISK_ORIGIN).header("Vary", "Origin");
+    };
+
+    for (const path of ["/api/netdisk/queue", "/api/netdisk/result"]) {
+        app.options(path, async (request, reply) => {
+            netdiskCors(reply);
+            return reply
+                .code(204)
+                .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                .header("Access-Control-Allow-Headers", "Content-Type")
+                .header("Access-Control-Max-Age", "600")
+                .send();
+        });
+    }
+
+    app.get("/api/netdisk/queue", async (request, reply) => {
+        netdiskCors(reply);
+        return { queue: buildQueue() };
+    });
+
+    app.post("/api/netdisk/result", async (request, reply) => {
+        netdiskCors(reply);
+        const body = (request.body ?? {}) as Record<string, unknown>;
+        const localId = Number(body.localId);
+        const groupId = String(body.groupId ?? "");
+        const url = String(body.url ?? "");
+        const code = String(body.code ?? "");
+        if (!Number.isInteger(localId) || localId <= 0 || groupId === "") {
+            return reply.code(400).send({ error: "缺少 localId 或 groupId。" });
+        }
+        const outcome = applyResult(localId, groupId, url, code);
+        if (!outcome.ok) {
+            return reply.code(400).send({ error: outcome.error });
+        }
+        return { ok: true, row: rowWithTerms(outcome.row) };
     });
 
     // The operational log: the client polls incrementally by id, so a full

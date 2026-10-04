@@ -68,6 +68,16 @@ npm test        # vitest：fileserve 模型、载荷构建、补完推送、暂�
 
 结构：`server/`（Fastify + better-sqlite3 + WP 客户端 + 同步/推送）、`src/`（React 19 + Tailwind 4 + AG Grid Community）、`shared/`（fileserve 数据模型与 CSV 导入模型，前后端共用）。
 
+## 网盘分享回填（netdisk/aiya-netdisk.user.js）
+
+油猴脚本（Tampermonkey，百度网盘 web 端）负责「定位 → 分享 → 回填」：上传由网盘客户端人工完成，脚本在 `pan.baidu.com` 页内按目录名定位文件夹、创建分享（页内动作，无 cookie 出浏览器），把链接+提取码回填到发帖器文件列表并**自动勾选该组推送**。发帖器侧对接端点为 `GET /api/netdisk/queue` 与 `POST /api/netdisk/result`（CORS 钉死 `pan.baidu.com` 源）。使用：
+
+1. Edge/Chrome 装 Tampermonkey → 新建脚本 → 粘贴 `netdisk/aiya-netdisk.user.js` 全文保存；
+2. 打开 `pan.baidu.com`（已登录），右下角「AIYA」浮标展开面板，确认网盘根目录（客户端上传的同名目录所在位置）与发帖器地址；
+3. 发帖器里给已上线行添加空链接的网盘组（默认不勾推送）→ 面板「刷新队列」→「开始处理」逐行定位/分享/回填（单行失败即停，面板显示 errno 提示）。
+
+分享有效期默认 30 天；「永久」需网盘会员。回填后的组自动勾选推送并置 dirty，随正常推送写入站点。
+
 ## 配套 WP 插件（wordpress_plugins/aiya-cms-resource-publisher）
 
 WP 侧配套插件（AIYA CMS - Resource Post Publisher）随本仓库单仓库维护，源码在 `wordpress_plugins/aiya-cms-resource-publisher/`（REST 命名空间 `aiya-publish/v1`，端点语义见其 `README.md`）。
