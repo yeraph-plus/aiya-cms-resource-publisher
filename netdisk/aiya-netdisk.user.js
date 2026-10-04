@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AIYA 网盘分享回填（百度）
 // @namespace    aiya-netdisk
-// @version      0.3.0
+// @version      0.3.1
 // @description  在百度网盘 web 端定位发帖器同名目录、创建分享并把链接回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
 // @match        https://pan.baidu.com/*
 // @grant        GM_xmlhttpRequest
@@ -202,6 +202,11 @@
             for (;;) {
                 const pending = queue.filter((item) => !item.status || item.status === "fail");
                 if (pending.length === 0 || !running) {
+                    if (pending.length === 0 && queue.every((item) => item.status === "done")) {
+                        setMsg("队列处理完毕。");
+                    } else if (pending.length === 0) {
+                        setMsg("队列为空，无可处理行（先在发帖器加空链接组，或清空组链接重取）。");
+                    }
                     break;
                 }
                 const item = pending[0];
@@ -320,17 +325,22 @@
         renderControls();
     }
 
+    function setMsg(text) {
+        const msg = panel.querySelector("#aiya-msg");
+        if (msg) {
+            msg.textContent = text;
+        }
+    }
+
     function refreshQueue() {
         return publisherFetch("/api/netdisk/queue")
             .then((data) => {
                 queue = data.queue.map((item) => ({ ...item }));
                 renderQueue();
+                setMsg(`队列已刷新：${queue.length} 条待处理`);
             })
             .catch((error) => {
-                const msg = panel.querySelector("#aiya-msg");
-                if (msg) {
-                    msg.textContent = String(error.message ?? error);
-                }
+                setMsg(String(error.message ?? error));
             });
     }
 
