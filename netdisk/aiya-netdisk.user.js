@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AIYA 网盘分享回填（百度）
 // @namespace    aiya-netdisk
-// @version      0.1.0
+// @version      0.2.0
 // @description  在百度网盘 web 端定位发帖器同名目录、创建分享并把链接回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
 // @match        https://pan.baidu.com/*
 // @grant        GM_xmlhttpRequest
@@ -19,7 +19,7 @@
     const cfg = {
         publisher: GM_getValue("publisher", "http://127.0.0.1:5175"),
         rootDir: GM_getValue("rootDir", "/"),
-        period: GM_getValue("period", "30"), // 分享有效期（天）；0 = 永久（需会员）
+        period: GM_getValue("period", "0"), // 分享有效期（天）；0 = 永久（需会员，过期自动回落提示）
         autoRun: false,
     };
     const saveCfg = () => {
@@ -35,27 +35,24 @@
         Array.from({ length: 4 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join("");
 
     /** Same-origin calls ride plain fetch (cookies attach automatically);
-     * publisher calls prefer GM_xmlhttpRequest and fall back to fetch
-     * (the lane endpoints allow the pan.baidu.com origin). */
-    async function apiGet(path, params) {
+     * paths are literal ("/api/list", "/share/set", …). JSON parse failures
+     * surface the HTTP status and the first bytes instead of a bare
+     * "Unexpected end of JSON input". */
+    async function apiJson(path, { params, method = "GET", form } = {}) {
         const query = new URLSearchParams(params ?? {});
-        const response = await fetch(`/api/${path}${query.size ? `?${query}` : ""}`, {
+        const url = `${path}${query.size ? `?${query}` : ""}`;
+        const response = await fetch(url, {
+            method,
             credentials: "include",
-            headers: { Accept: "application/json, text/plain, */*" },
+            headers: form ? { "Content-Type": "application/x-www-form-urlencoded" } : { Accept: "application/json, text/plain, */*" },
+            body: form ? new URLSearchParams(form).toString() : undefined,
         });
-        return response.json();
-    }
-
-    async function apiPostForm(path, params, form) {
-        const query = new URLSearchParams(params ?? {});
-        const body = new URLSearchParams(form);
-        const response = await fetch(`/api/${path}${query.size ? `?${query}` : ""}`, {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: body.toString(),
-        });
-        return response.json();
+        const text = await response.text();
+        try {
+            return JSON.parse(text);
+        } catch {
+            throw new Error(`${path} 返回非 JSON（HTTP ${response.status}）：${text.slice(0, 80) || "（空响应）"}`);
+        }
     }
 
     function publisherFetch(path, options) {
@@ -100,7 +97,9 @@
         if (bdstoken) {
             return bdstoken;
         }
-        const result = await apiGet("gettemplatevariable", { clienttype: 0, app_id: 250528, web: 1, fields: '["bdstoken"]' });
+        const result = await apiJson("/api/gettemplatevariable", {
+            params: { clienttype: 0, app_id: 250528, web: 1, fields: '["bdstoken"]' },
+        });
         if (result?.errno !== 0 || !result?.result?.bdstoken) {
             throw new Error(`取 bdstoken 失败（errno=${result?.errno}）——登录态可能失效`);
         }
@@ -112,21 +111,22 @@
      * first (deterministic), the netdisk search as the fallback. */
     async function findFolder(dirName) {
         for (let page = 1; ; page += 1) {
-            const result = await apiGet("list", {
-                dir: cfg.rootDir,
-                order: "name",
-                desc: 0,
-                num: 1000,
-                page,
-                clienttype: 0,
-                app_id: 250528,
-                web: 1,
-                showempty: 0,
+            const result = await apiJson("/api/list", {
+                params: {
+                    dir: cfg.rootDir,
+                    order: "name",
+                    desc: 0,
+                    num: 1000,
+                    page,
+                    clienttype: 0,
+                    app_id: 250528,
+                    web: 1,
+                },
             });
             if (result?.errno !== 0) {
                 throw new Error(`列目录失败（errno=${result?.errno}）——登录态可能失效或根目录不存在`);
             }
-            const entries = result.data ?? result.list ?? [];
+            const entries = result.list ?? result.data ?? [];
             const hit = entries.find(
                 (entry) => (Number(entry.isdir) === 1 || entry.isdir === "1") &&
                     (entry.server_filename === dirName || entry.server_filename?.startsWith(`${dirName}-`)),
@@ -142,10 +142,10 @@
 
     async function createShare(entry, code) {
         const token = await getBdstoken();
-        const result = await apiPostForm(
-            "share/set",
-            { app_id: 250528, web: 1, channel: "dlna", clienttype: 0, page: 1, from: "web" },
-            {
+        const result = await apiJson("/share/set", {
+            params: { app_id: 250528, web: 1, channel: "dlna", clienttype: 0, page: 1, from: "web" },
+            method: "POST",
+            form: {
                 period: cfg.period,
                 pwd: code,
                 schannel: 4,
@@ -153,13 +153,14 @@
                 fid_list: JSON.stringify([entry.fs_id]),
                 bdstoken: token,
             },
-        );
+        });
         if (result?.errno !== 0) {
             const hints = {
                 [-6]: "登录态失效",
                 [-7]: "参数或风控拦截",
                 [-9]: "文件不存在（fs_id 失效）",
                 [-15]: "分享过于频繁（逐行节奏被打破？）",
+                [-70]: "该账号不支持永久分享（换 30/7 天试试）",
                 105: "分享链接数达到上限",
             };
             throw new Error(`创建分享失败（errno=${result?.errno}${hints[result?.errno] ? `：${hints[result?.errno]}` : ""}）`);
@@ -184,7 +185,8 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ localId: item.localId, groupId: item.groupId, url: link, code }),
         });
-        setStatus(item, "done", `已回填：${link}（提取码 ${code}，已勾选推送）`);
+        const periodText = cfg.period === "0" ? "永久" : `${cfg.period} 天`;
+        setStatus(item, "done", `已回填：${link}（提取码 ${code} · ${periodText}，已勾选推送）`);
     }
 
     // ---------- 队列循环 -----------------------------------------------------
@@ -224,7 +226,7 @@
     const panel = document.createElement("div");
     panel.id = "aiya-netdisk-panel";
     panel.style.cssText = [
-        "position:fixed", "right:16px", "bottom:16px", "z-index:999999", "width:420px",
+        "position:fixed", "right:16px", "top:64px", "z-index:999999", "width:420px",
         "background:#fff", "border:1px solid #ddd", "border-radius:8px", "box-shadow:0 4px 16px rgba(0,0,0,.18)",
         "font:12px/1.5 system-ui,sans-serif", "color:#333", "display:none",
     ].join(";");
@@ -289,10 +291,10 @@
                     <input id="aiya-pub" value="${cfg.publisher}" style="flex:1;min-width:0">
                     <label style="flex:none">有效期</label>
                     <select id="aiya-period" style="flex:none">
+                        <option value="0">永久（需会员）</option>
                         <option value="30">30 天</option>
                         <option value="7">7 天</option>
                         <option value="1">1 天</option>
-                        <option value="0">永久（需会员）</option>
                     </select>
                 </div>
                 <div style="display:flex;gap:6px;align-items:center">
@@ -340,25 +342,56 @@
         renderControls();
     }
 
-    const launcher = document.createElement("div");
-    launcher.textContent = "AIYA";
-    launcher.title = "AIYA 网盘回填面板";
-    launcher.style.cssText = [
-        "position:fixed", "right:16px", "bottom:16px", "z-index:999999", "cursor:pointer",
-        "background:#06a7ff", "color:#fff", "padding:6px 10px", "border-radius:16px",
-        "font:bold 12px system-ui", "box-shadow:0 2px 8px rgba(0,0,0,.25)",
-    ].join(";");
-    launcher.onclick = () => {
-        panel.style.display = panel.style.display === "block" ? "none" : "block";
-        if (panel.style.display === "block" && !panel.querySelector("#aiya-queue").childElementCount) {
+    // ---------- 挂钩：百度网盘顶部导航 ---------------------------------------
+    // The trigger lives in the page's top bar (.wp-s-header) as "AIYA 挂钩";
+    // SPA re-renders replace the bar, so a guard re-attaches it. Without the
+    // bar (page redesign) it falls back to a fixed position button.
+    let panelVisible = false;
+
+    function togglePanel() {
+        panelVisible = !panelVisible;
+        panel.style.display = panelVisible ? "block" : "none";
+        if (panelVisible && !panel.querySelector("#aiya-queue").childElementCount) {
             panel.querySelector("#aiya-refresh").click();
         }
-    };
+    }
+
+    function buildTrigger(variant) {
+        const hook = document.createElement("div");
+        hook.id = variant === "bar" ? "aiya-hook" : "aiya-hook-fallback";
+        hook.textContent = "AIYA 挂钩";
+        hook.onclick = togglePanel;
+        if (variant === "bar") {
+            hook.style.cssText = [
+                "cursor:pointer", "padding:0 16px", "height:100%", "display:flex", "align-items:center",
+                "font-size:13px", "color:#fff", "background:rgba(255,255,255,.14)", "user-select:none",
+            ].join(";");
+            hook.onmouseenter = () => (hook.style.background = "rgba(255,255,255,.28)");
+            hook.onmouseleave = () => (hook.style.background = "rgba(255,255,255,.14)");
+        } else {
+            hook.style.cssText = [
+                "position:fixed", "right:16px", "top:12px", "z-index:999999", "cursor:pointer",
+                "background:#06a7ff", "color:#fff", "padding:6px 12px", "border-radius:16px",
+                "font:bold 12px system-ui", "box-shadow:0 2px 8px rgba(0,0,0,.25)",
+            ].join(";");
+        }
+        return hook;
+    }
+
+    function mountHook() {
+        const host = document.querySelector(".wp-s-header") ?? document.querySelector(".wp-s-header-wrapper");
+        if (host && !document.getElementById("aiya-hook") && !document.getElementById("aiya-hook-fallback")) {
+            host.appendChild(buildTrigger("bar"));
+        } else if (!host && !document.getElementById("aiya-hook-fallback") && !document.getElementById("aiya-hook")) {
+            document.body.appendChild(buildTrigger("fallback"));
+        }
+    }
 
     const mount = () => {
         document.body.appendChild(panel);
-        document.body.appendChild(launcher);
         renderPanel();
+        mountHook();
+        setInterval(mountHook, 2000);
     };
     if (document.body) {
         mount();
