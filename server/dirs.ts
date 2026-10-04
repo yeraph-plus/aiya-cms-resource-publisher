@@ -1,10 +1,11 @@
 /**
  * Upload staging directories: one folder per post under the configured root
- * (自动创建文件夹位置), named `{postId}-{sanitized title}`. Nothing is
- * recorded — the leading post id is the only load-bearing part of a folder
- * name, so the filesystem itself is the source of truth: every ensure/open
- * scans the root, claims a folder already carrying the id (manual renames
- * and title edits never break the link) and otherwise creates one.
+ * (自动创建文件夹位置), named `{帖子ID}-{sanitized title}` with the id
+ * zero-padded to five digits. Nothing is recorded — the leading padded id is
+ * the only load-bearing part of a folder name, so the filesystem itself is
+ * the source of truth: every ensure/open scans the root, claims a folder
+ * already carrying the id (manual renames and title edits never break the
+ * link) and otherwise creates one.
  */
 
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
@@ -67,6 +68,10 @@ export function findStagingDir(postId: number): { dir: string; name: string } | 
     return match ? { dir: join(workRoot, match), name: match } : null;
 }
 
+/** Logged once per session: an unconfigured root blocks every ensure, and a
+ * per-add warn would spam the console on a row edited repeatedly. */
+let warnedRootMissing = false;
+
 /**
  * Idempotent and stateless: a folder already carrying the post's id is
  * claimed, only otherwise is a new folder created. Unpublished rows and an
@@ -82,7 +87,10 @@ export function ensureStagingDir(localId: number): EnsureResult {
     }
     const workRoot = (getSetting("workRoot") ?? "").trim();
     if (workRoot === "") {
-        logEvent("warn", "目录", `#${row.postId} 需要本地目录，但「自动创建文件夹位置」还没配置`, row.postId);
+        if (!warnedRootMissing) {
+            warnedRootMissing = true;
+            logEvent("warn", "目录", `#${row.postId} 需要本地目录，但「自动创建文件夹位置」还没配置（本次会话只提醒这一次）`, row.postId);
+        }
         return blocked("先在设置里填好自动创建文件夹位置。");
     }
 

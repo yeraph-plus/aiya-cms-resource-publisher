@@ -82,7 +82,7 @@ function applyResponse(row: PostRow, item: WpItem): void {
         fileserve: mergeRemoteFileserve(item.fileserve, row.fileserve),
         slug: parseSlugFromLink(item.link),
         // A successful whole-row write re-confirms the file list, so the
-        // completion baseline moves with it.
+        // digest baseline moves with it.
         fileservePushedDigest: item.fileserve ? configDigest(item.fileserve) : null,
         dirty: false,
         conflict: false,

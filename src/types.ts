@@ -24,8 +24,8 @@ export interface TermInfo {
 
 /** Server-recomputed push state of a row's flagged file groups — the grid
  * badge's ground truth. */
-export interface CompletionStateDTO {
-    status: "none" | "incomplete" | "ready" | "pushed";
+export interface FileServeStateDTO {
+    status: "none" | "incomplete" | "draft" | "ready" | "pushed";
     missing: string[];
 }
 
@@ -48,7 +48,7 @@ export interface RowDTO {
     lastError: string | null;
     terms: Record<string, string[]>;
     fileserveParsed: unknown;
-    completion: CompletionStateDTO;
+    fileServe: FileServeStateDTO;
 }
 
 export interface StateDTO {

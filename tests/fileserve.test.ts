@@ -114,12 +114,18 @@ describe("fileserve model", () => {
         expect(config["1"]?.price).toBe(0);
     });
 
-    it("summarizes a config for the grid column", () => {
+    it("summarizes a config for the grid column, counting flagged groups only for the price", () => {
         const { config } = normalizeConfig({
             "1": { adapter: "platform", price: 5 },
             "2": { adapter: "openlist_list", price: 2 },
         });
         expect(configSummary(config)).toBe("2 组 · 7 分/次");
+        // A draft group shows in the count but never in the price.
+        const mixed = normalizeConfig({
+            "1": { adapter: "platform", price: 5 },
+            "2": { adapter: "openlist_list", price: 2, push: false },
+        });
+        expect(configSummary(mixed.config)).toBe("1/2 组 · 5 分/次");
         expect(configSummary(null)).toBe("—");
     });
 });

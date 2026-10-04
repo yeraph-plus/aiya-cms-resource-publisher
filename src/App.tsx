@@ -144,7 +144,7 @@ export default function App() {
             if (outcome.error) {
                 notify("err", `推送失败：${outcome.error}`);
             } else if (outcome.failed > 0) {
-                notify("err", `推送完成：成功 ${outcome.pushed}，失败 ${outcome.failed}（详情见行内错误）`);
+                notify("err", `推送完成：成功 ${outcome.pushed}，失败 ${outcome.failed}（详情见运行日志与详情面板）`);
             } else {
                 notify("ok", `推送完成：${outcome.pushed} 条已写入站点`);
             }

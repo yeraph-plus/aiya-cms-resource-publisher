@@ -1,9 +1,9 @@
 /**
- * The completion flow's "nothing new to push" yardstick: a short digest over
- * a file list config. Key-order-insensitive canonical JSON, so the same
- * config built by different paths (normalizeConfig vs the site's stored
- * shape) always hashes alike. Server-only — node:crypto never enters the
- * web bundle.
+ * The file-list comparison digest: a short hash over a config, key-order
+ * insensitive so the same config built by different paths (normalizeConfig vs
+ * the site's stored shape) always hashes alike. Feeds the row's
+ * fileservePushedDigest baseline and the grid's 文件未推 badge.
+ * Server-only — node:crypto never enters the web bundle.
  */
 
 import { createHash } from "node:crypto";

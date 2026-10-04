@@ -45,11 +45,17 @@ export default function FileServeEditor({ config, onChange, onGroupAdded }: Prop
             return;
         }
         // A price the user never touched (0 or the old adapter's default)
-        // follows the new adapter's suggestion; a custom price survives.
+        // follows the new adapter's suggestion; a custom price and the push
+        // flag survive.
         const untouched = (previous.price ?? 0) === 0 || previous.price === priceDefault(previous.adapter);
         commit({
             ...groups,
-            [id]: { ...emptyGroup(adapter), title: previous.title ?? "", ...(untouched ? {} : { price: previous.price ?? 0 }) },
+            [id]: {
+                ...emptyGroup(adapter),
+                title: previous.title ?? "",
+                push: previous.push ?? false,
+                ...(untouched ? {} : { price: previous.price ?? 0 }),
+            },
         });
     };
 

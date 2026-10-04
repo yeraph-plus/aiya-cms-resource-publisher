@@ -92,11 +92,14 @@ function flagBadges(row: RowDTO): string[] {
     if (row.lastError) {
         badges.push("错误");
     }
-    if (row.completion.status === "ready") {
+    if (row.fileServe.status === "ready") {
         badges.push("文件未推");
     }
-    if (row.completion.status === "incomplete") {
+    if (row.fileServe.status === "incomplete") {
         badges.push("文件缺项");
+    }
+    if (row.fileServe.status === "draft") {
+        badges.push("文件草稿");
     }
     return badges;
 }
@@ -147,8 +150,10 @@ export default function Grid({ rows, terms, authors, selectedId, onSelect, onEdi
                                         badge === "错误"
                                             ? (data.lastError ?? undefined)
                                             : badge === "文件缺项"
-                                              ? data.completion.missing.join("；")
-                                              : undefined
+                                              ? data.fileServe.missing.join("；")
+                                              : badge === "文件草稿"
+                                                ? "全部组为草稿：下一次推送会发送空配置，清空线上文件列表"
+                                                : undefined
                                     }
                                     className={`px-1 rounded text-[11px] ${
                                         badge === "错误"
@@ -157,13 +162,15 @@ export default function Grid({ rows, terms, authors, selectedId, onSelect, onEdi
                                               ? "bg-cyan-100 text-cyan-700"
                                               : badge === "文件缺项"
                                                 ? "bg-amber-100 text-amber-700"
-                                                : badge === "冲突"
-                                                  ? "bg-red-100 text-red-700"
-                                                  : badge === "待推送"
-                                                    ? "bg-amber-100 text-amber-700"
-                                                    : badge === "线上缺失"
-                                                      ? "bg-neutral-300 text-neutral-700"
-                                                      : "bg-blue-100 text-blue-700"
+                                                : badge === "文件草稿"
+                                                  ? "bg-neutral-200 text-neutral-600"
+                                                  : badge === "冲突"
+                                                    ? "bg-red-100 text-red-700"
+                                                    : badge === "待推送"
+                                                      ? "bg-amber-100 text-amber-700"
+                                                      : badge === "线上缺失"
+                                                        ? "bg-neutral-300 text-neutral-700"
+                                                        : "bg-blue-100 text-blue-700"
                                     }`}
                                 >
                                     {badge}

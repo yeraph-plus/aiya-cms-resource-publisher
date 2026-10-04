@@ -25,14 +25,14 @@ import {
 } from "./db.js";
 import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
-import { completionState } from "./completion.js";
+import { fileServeState } from "./fileserveState.js";
 import { ensureStagingDir, findStagingDir, openStagingDir } from "./dirs.js";
 import { isOurStateEndpoint, killTree, listenerPid } from "./portguard.js";
 import { getProgress, setProgress } from "./progress.js";
 import { normalizeSiteUrl, ping, WpError } from "./wp.js";
 import { parseCsv } from "../shared/csv.js";
 import { buildImportRows, guessMapping, TAXONOMY_ORDER, type ImportMapping } from "../shared/import.js";
-import { normalizeConfig } from "../shared/fileserve.js";
+import { mergeRemoteFileserve, normalizeConfig } from "../shared/fileserve.js";
 
 export async function buildApp(): Promise<FastifyInstance> {
     const app = Fastify({ logger: false, bodyLimit: 16 * 1024 * 1024 });
@@ -54,7 +54,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         ...saved,
         terms: getTermRefs(saved.localId),
         fileserveParsed: parseFileserve(saved.fileserve),
-        completion: completionState(saved),
+        fileServe: fileServeState(saved),
     });
 
 function errorMessage(error: unknown): string {
@@ -267,7 +267,10 @@ function errorMessage(error: unknown): string {
         dateLocal: snapshot.dateLocal,
         dateGmt: snapshot.dateGmt,
         modifiedGmt: snapshot.modifiedGmt,
-        fileserve: snapshot.fileserve ? JSON.stringify(snapshot.fileserve) : null,
+        // Like every other site-confirmation write-back, the revert keeps the
+        // row's local draft groups (push off) — the snapshot stores the site
+        // shape only.
+        fileserve: mergeRemoteFileserve(snapshot.fileserve ?? null, row.fileserve),
         dirty: false,
         conflict: false,
         lastError: null,

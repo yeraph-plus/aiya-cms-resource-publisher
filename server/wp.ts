@@ -225,10 +225,6 @@ export async function updateResource(creds: WpCreds, postId: number, payload: Pu
     return request<WpItem>(creds, "PUT", `/resource/${postId}`, payload);
 }
 
-export async function getResource(creds: WpCreds, postId: number): Promise<WpItem> {
-    return request<WpItem>(creds, "GET", `/resource/${postId}`);
-}
-
 /**
  * The resource permalink's last path segment is the slug. Plain permalinks
  * (?p=123) carry no slug segment and answer null; percent-encoded CJK slugs

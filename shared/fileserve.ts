@@ -254,15 +254,15 @@ export function nextId(config: FileServeConfig): string {
     return String(highest + 1);
 }
 
-/** A display summary: how many groups and what they cost per file in total. */
+/** A display summary: how many groups (active/total when drafts exist) and
+ * what the flagged groups cost per visit — drafts never charge. */
 export function configSummary(config: FileServeConfig | null): string {
     if (!config) {
         return "—";
     }
-    const groups = Object.keys(config).length;
-    const total = Object.values(config).reduce(
-        (sum, group) => sum + (typeof group.price === "number" ? group.price : 0),
-        0,
-    );
-    return `${groups} 组 · ${total} 分/次`;
+    const groups = Object.values(config);
+    const active = groups.filter((group) => group.push !== false);
+    const price = (list: FileGroup[]) => list.reduce((sum, group) => sum + (typeof group.price === "number" ? group.price : 0), 0);
+    const count = active.length === groups.length ? `${groups.length} 组` : `${active.length}/${groups.length} 组`;
+    return `${count} · ${price(active)} 分/次`;
 }

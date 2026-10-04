@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 `);
 
-// Databases from before the completion flow / digest baseline lack these
+// Databases from before the digest baseline / slug capture lack these
 // columns; the guarded ALTERs are the whole migration.
 const postColumns = (db.pragma("table_info(posts)") as { name: string }[]).map((column) => column.name);
 if (!postColumns.includes("slug")) {
@@ -123,8 +123,8 @@ export interface PostRow {
     fileserve: string | null;
     /** The permalink's last segment, captured from sync/push responses. */
     slug: string | null;
-    /** Digest of the file list the site last confirmed — the "nothing new to
-     * push" yardstick for the completion flow. */
+    /** Digest of the file list the site last confirmed — feeds the grid's
+     * 文件未推 / pushed badges. */
     fileservePushedDigest: string | null;
     dirty: boolean;
     conflict: boolean;

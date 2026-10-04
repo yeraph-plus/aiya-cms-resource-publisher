@@ -111,9 +111,9 @@ describe("per-group push flags in the whole-row push", () => {
 
         // The badge flags the gap…
         const state = await app.inject({ method: "GET", url: "/api/state" });
-        const completion = state.json().posts.find((p: { localId: number }) => p.localId === localId).completion;
-        expect(completion.status).toBe("incomplete");
-        expect(completion.missing).toEqual(["组 #1 · 链接"]);
+        const fileServe = state.json().posts.find((p: { localId: number }) => p.localId === localId).fileServe;
+        expect(fileServe.status).toBe("incomplete");
+        expect(fileServe.missing).toEqual(["组 #1 · 链接"]);
 
         // …but the push itself is the user's call and carries the group.
         vi.mocked(wp.createResource).mockResolvedValue(item(705));
@@ -155,7 +155,7 @@ describe("per-group push flags in the whole-row push", () => {
         // The baseline covers the site-confirmed subset; the badge reads "pushed".
         expect(after.fileservePushedDigest).toBe(configDigest({ "1": platformGroup("https://pan.baidu.com/s/1") }));
         const state = await app.inject({ method: "GET", url: "/api/state" });
-        expect(state.json().posts.find((p: { localId: number }) => p.localId === localId).completion.status).toBe("pushed");
+        expect(state.json().posts.find((p: { localId: number }) => p.localId === localId).fileServe.status).toBe("pushed");
 
         // A later pull of the same item keeps the draft riding along.
         vi.mocked(wp.listResources).mockResolvedValue({
@@ -177,7 +177,7 @@ describe("per-group push flags in the whole-row push", () => {
         expect(afterSync["2"].push).toBe(false);
     });
 
-    it("an all-draft list pushes the empty production config (clears the online list)", async () => {
+    it("an all-draft list badges 文件草稿 and pushes the empty production config (clears the online list)", async () => {
         const localId = db.insertPost({ status: "publish", title: "行", postId: 703 });
         await app.inject({
             method: "PUT",
@@ -186,7 +186,7 @@ describe("per-group push flags in the whole-row push", () => {
         });
 
         const state = await app.inject({ method: "GET", url: "/api/state" });
-        expect(state.json().posts.find((p: { localId: number }) => p.localId === localId).completion.status).toBe("none");
+        expect(state.json().posts.find((p: { localId: number }) => p.localId === localId).fileServe.status).toBe("draft");
 
         vi.mocked(wp.updateResource).mockResolvedValue(item(703));
         const res = await app.inject({ method: "POST", url: "/api/push", payload: { localIds: [localId] } });
@@ -195,6 +195,45 @@ describe("per-group push flags in the whole-row push", () => {
         // online list) — unflagged drafts never leak.
         const payload = vi.mocked(wp.updateResource).mock.calls[0]![2];
         expect(payload.fileserve).toEqual({});
+    });
+
+    it("reverting to the snapshot keeps the row's local draft groups", async () => {
+        const localId = db.insertPost({
+            status: "publish",
+            title: "行",
+            postId: 706,
+            fileserve: JSON.stringify({ "1": platformGroup("https://pan.baidu.com/s/live") }),
+            snapshot: JSON.stringify({
+                status: "publish",
+                title: "行",
+                content: "",
+                authorId: null,
+                dateLocal: "2026-01-01T00:00:00",
+                dateGmt: "2026-01-01T00:00:00",
+                modifiedGmt: "2026-01-01T00:00:00",
+                terms: {},
+                fileserve: { "1": platformGroup("https://pan.baidu.com/s/live") },
+            }),
+        });
+        // A local draft added after the site confirmation.
+        await app.inject({
+            method: "PUT",
+            url: `/api/posts/${localId}`,
+            payload: {
+                fileserve: {
+                    "1": platformGroup("https://pan.baidu.com/s/live"),
+                    "2": platformGroup("https://pan.baidu.com/s/draft", false),
+                },
+            },
+        });
+        db.updatePostRow(localId, { dirty: false });
+
+        const res = await app.inject({ method: "POST", url: `/api/posts/${localId}/revert`, payload: {} });
+        expect(res.json().ok).toBe(true);
+        const stored = JSON.parse(db.getPost(localId)!.fileserve!);
+        expect(Object.keys(stored).sort()).toEqual(["1", "2"]);
+        expect(stored["2"].push).toBe(false);
+        expect(stored["1"].url).toBe("https://pan.baidu.com/s/live");
     });
 
     it("marks the row dirty-ready after the digest drifts, then pushed again", async () => {
@@ -216,14 +255,14 @@ describe("per-group push flags in the whole-row push", () => {
             payload: { fileserve: { "1": platformGroup("https://pan.baidu.com/s/v2") } },
         });
         const dirty = await app.inject({ method: "GET", url: "/api/state" });
-        expect(dirty.json().posts.find((p: { localId: number }) => p.localId === localId).completion.status).toBe("ready");
+        expect(dirty.json().posts.find((p: { localId: number }) => p.localId === localId).fileServe.status).toBe("ready");
 
         vi.mocked(wp.updateResource).mockResolvedValue(
             item(704, { fileserve: { "1": platformGroup("https://pan.baidu.com/s/v2") } }),
         );
         await app.inject({ method: "POST", url: "/api/push", payload: { localIds: [localId] } });
         const done = await app.inject({ method: "GET", url: "/api/state" });
-        expect(done.json().posts.find((p: { localId: number }) => p.localId === localId).completion.status).toBe("pushed");
+        expect(done.json().posts.find((p: { localId: number }) => p.localId === localId).fileServe.status).toBe("pushed");
     });
 
     it("answers 409 while a push holds the slot and completion/push endpoints stay retired", async () => {

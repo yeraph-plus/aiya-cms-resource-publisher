@@ -155,7 +155,6 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
     // The staging folder is keyed by the site's post id; adding the first
     // group triggers it, and the row shows its state.
     // Group fields the editor renders; the per-group 推送 flag rides along.
-    const listEntries = Object.entries(draft.fileserve ?? {}).sort(([a], [b]) => Number(a) - Number(b));
 
     // The staging folder (自动创建文件夹位置) is keyed by the site's post id;
     // adding the first group triggers it, and the row shows its state.
