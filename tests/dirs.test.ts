@@ -3,15 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { stagingDirName } from "../server/dirs.js";
 
 // The db module opens its file at import time — point it at a temp dir
-// before the app (and everything it pulls in) is imported.
+// before the app (and everything it pulls in) is imported. No static value
+// import may reach server/dirs.js or server/db.js: ESM hoists imports above
+// the env assignment, and the db would silently open the real publisher.db.
 process.env.PUBLISHER_DATA = mkdtempSync(join(tmpdir(), "publisher-dirs-"));
 
 let app: FastifyInstance;
 let buildApp: typeof import("../server/index.js").buildApp;
 let db: typeof import("../server/db.js");
+let stagingDirName: typeof import("../server/dirs.js").stagingDirName;
 let workRoot: string;
 
 beforeAll(async () => {
@@ -19,6 +21,7 @@ beforeAll(async () => {
     app = await buildApp();
     await app.ready();
     db = await import("../server/db.js");
+    ({ stagingDirName } = await import("../server/dirs.js"));
     db.setSetting("siteUrl", "http://dirs.test");
     db.setSetting("username", "u");
     db.setSetting("appPassword", "p");
