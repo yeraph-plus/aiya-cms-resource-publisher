@@ -25,6 +25,7 @@ import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
 import { coerceDirNameMode, generateSink, listSinks, parseTemplate } from "./carrier.js";
 import { runCompletionPush } from "./completion.js";
+import { isOurStateEndpoint, killTree, listenerPid } from "./portguard.js";
 import { getProgress, setProgress } from "./progress.js";
 import { getResource, normalizeSiteUrl, parseSlugFromLink, ping, WpError } from "./wp.js";
 import { parseCsv } from "../shared/csv.js";
@@ -536,26 +537,62 @@ const isEntry = (() => {
 })();
 
 if (isEntry) {
-    const app = await buildApp();
+    let current: FastifyInstance | null = null;
 
     for (const signal of ["SIGINT", "SIGTERM"] as const) {
         // tsx watch restarts the child with SIGTERM; closing the listener here
         // frees the port before exit, or the next start dies on EADDRINUSE.
         process.on(signal, () => {
-            app.close().finally(() => process.exit(0));
+            // A null instance (mid-build, mid-retry) has nothing to close —
+            // but registering the handler already suppressed the default
+            // exit, so exit directly or Ctrl+C before bind hangs the process.
+            if (current) {
+                current.close().finally(() => process.exit(0));
+            } else {
+                process.exit(0);
+            }
         });
     }
 
-    app.listen({ port: PORT, host: "127.0.0.1" }).then(() => {
+    // The retry exists for the hard-kill orphan: a publisher killed without
+    // its signal handlers leaves the old server holding the port, and the
+    // portguard evicts exactly that squatter (our own /api/state fingerprint)
+    // before the second bind attempt. Anything else on the port aborts with
+    // its PID instead of being touched.
+    for (let attempt = 0; ; attempt += 1) {
+        const app = await buildApp();
+        current = app;
+        try {
+            await app.listen({ port: PORT, host: "127.0.0.1" });
+        } catch (error) {
+            await app.close().catch(() => {});
+            current = null;
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "EADDRINUSE" || attempt > 0) {
+                if (code === "EADDRINUSE") {
+                    const squatter = listenerPid(PORT);
+                    console.error(
+                        `端口 ${PORT} 仍被占用（PID ${squatter?.pid ?? "?"}${squatter?.image ? `，${squatter.image}` : ""}）——结束它后再启动。`,
+                    );
+                } else {
+                    console.error(error);
+                }
+                process.exit(1);
+            }
+            const squatter = listenerPid(PORT);
+            if (!squatter || !(await isOurStateEndpoint(PORT))) {
+                console.error(
+                    `端口 ${PORT} 被其它进程占用（PID ${squatter?.pid ?? "?"}${squatter?.image ? `，${squatter.image}` : ""}）——不是本工具实例，请自行处理后再启动。`,
+                );
+                process.exit(1);
+            }
+            console.log(`端口 ${PORT} 上是本工具的残留实例（PID ${squatter.pid}，强杀遗留的孤儿），接管中……`);
+            killTree(squatter.pid);
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            continue;
+        }
         console.log(`AIYA Publisher listening on http://localhost:${PORT}`);
         console.log(`db: ${dbPath}`);
-    }).catch((error) => {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code === "EADDRINUSE") {
-            console.error(`端口 ${PORT} 已被占用——旧的发帖器实例还在运行，先结束它再启动。`);
-        } else {
-            console.error(error);
-        }
-        process.exit(1);
-    });
+        break;
+    }
 }
