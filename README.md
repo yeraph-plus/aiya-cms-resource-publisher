@@ -13,6 +13,8 @@ npm run dev        # 开发：本地 API(5175) + Vite(5173，代理 /api)
 npm run build && npm start   # 单进程 http://localhost:5175
 ```
 
+启动即接管：dev 与 start 若发现端口被**本工具的残留实例**占用（强杀遗留的孤儿），会自动结束它并占住端口（HTTP 指纹识别，双栈探测，只杀自家）；被其它进程占用则报出 PID 拒绝启动。dev 由 `scripts/dev.mjs` 托管：启动前驱逐 5173 上的自家 Vite 残留，Ctrl+C/子进程退出时树杀两个子树，不留 npm 中间层孤儿。
+
 ## 桌面应用打包（Electron）
 
 ```bash
@@ -41,6 +43,7 @@ npm run app:win    # vite build + 服务端 esbuild bundle + 切换 electron ABI
 - **术语引用**：数字 = 线上既有 term id；`name:xxx` = 线上尚无的新标签（推送时由站点自动创建，需要 `manage_terms` 能力）。推送响应回填真实 id。
 - **CSV 导入**：「导入 CSV」批量建本地新行入待推送队列（不推送，推送走既有按钮）。首行表头，向导自动猜测列映射（标题/正文/状态/发布时间/发布者/六个术语列，可改）；标题必填、状态含中文别名（草稿/发布/定时）、发布时间折叠为 `YYYY-MM-DDTHH:mm`（future 必须带时间）；「发布者(账号)」按显示名匹配作者表（未匹配默认该行报错，可切换回落默认作者）——裸「作者」表头是 `resource_author` 术语列，不是账号；编码自动识别 UTF-8/GBK/UTF-16，单次上限 5000 行。好行单事务整体入队、坏行按行号报原因，重复导入同一文件会建重复行。向导里的预览计数与实际写入跑的是同一份 `shared/import.ts` 纯函数。
 - **fileserve 编辑器**：组卡片 + 适配器下拉，字段表与归一化语义在 `shared/fileserve.ts` 逐字镜像 PHP 侧（未知键丢弃、缺省补默认、price 折非负 int）；空配置推送 = 清除线上文件列表（会触发刷时间）。
+- **fileserve 补完**：已发布且文件列表为空的行可「生成文件骨架」——补完工作目录（设置里配）下创建以文章命名的目录（默认 post id，可切 ID-slug / slug）+ `fileserve.json` 载体（组模板可配，默认百度+夸克各一组）。网盘客户端把文件传进同名目录、分享链回填载体（脚本或手动粘贴），然后「补完推送」把载体编译出的配置**只 PUT fileserve**（标题/正文/术语一概不动；值有变化按站点规则刷发布时间）。回写是 scoped 的：只动 fileserve、modified 与快照对应字段，脏行的其它在制编辑与推送队列位置不受影响。已有文件列表的行不走此流程（补完推送会整体替换 meta 键）；载体是离线阶段唯一真源，推送记摘要，无新增链接不重推。
 - 本地删行只删本地记录，**不删除线上帖子**。
 - **UI 约定**：无嵌套模态框——表格行内编辑 + 右侧详情面板承载主编辑面；弹层只允许单层（设置、CSV 导入等）。
 
@@ -48,7 +51,7 @@ npm run app:win    # vite build + 服务端 esbuild bundle + 切换 electron ABI
 
 - `settings`：站点地址、用户名、应用密码（**本地明文**，本机工具可接受，勿把 db 文件提交或外传）、HTTP 代理、默认作者、同步游标
 - `authors` / `terms`：作者登记表（同步自动收录 + 手工备注）、词法术语缓存
-- `posts` + `post_terms`：行状态（含 dirty/conflict/missing 标记、last_error、快照 JSON）与术语引用
+- `posts` + `post_terms`：行状态（含 dirty/conflict/missing 标记、last_error、快照 JSON）、线上 slug（取自 permalink，供补完目录命名）与术语引用
 
 `PUBLISHER_DATA` 环境变量可重定向数据目录（默认进程工作目录）。
 
