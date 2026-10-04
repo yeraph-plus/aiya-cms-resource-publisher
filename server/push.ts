@@ -18,6 +18,7 @@ import {
 } from "./wp.js";
 import { buildPayload } from "./payload.js";
 import { normalizeConfig } from "../shared/fileserve.js";
+import { configDigest } from "./digest.js";
 import { setProgress } from "./progress.js";
 
 /** Consecutive transport-level failures (status 0) before the run aborts. */
@@ -79,6 +80,9 @@ function applyResponse(row: PostRow, item: WpItem): void {
         modifiedGmt: state.modifiedGmt,
         fileserve: remoteFileserve,
         slug: parseSlugFromLink(item.link),
+        // A successful whole-row write re-confirms the file list, so the
+        // completion baseline moves with it.
+        fileservePushedDigest: item.fileserve ? configDigest(item.fileserve) : null,
         dirty: false,
         conflict: false,
         missing: false,

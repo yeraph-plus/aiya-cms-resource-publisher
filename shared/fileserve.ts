@@ -68,6 +68,30 @@ export function fieldLabel(id: string): string {
     return FIELD_LABELS[id] ?? id;
 }
 
+/**
+ * The one field each adapter cannot work without — a group missing it would
+ * publish a dead download entry, so the completion push refuses the row (and
+ * the editor points at the field). Shared by the web UI and the server.
+ */
+export const ADAPTER_REQUIRED: Record<string, string> = {
+    platform: "url",
+    openlist_list: "path",
+    openlist_search: "keywords",
+    gofile_api: "folder_id",
+};
+
+/** The required field id when it carries nothing usable, else null. */
+export function groupMissingField(group: FileGroup): string | null {
+    const required = ADAPTER_REQUIRED[group.adapter];
+    if (required === undefined) {
+        // normalizeConfig rejects unknown adapters before this can matter.
+        return null;
+    }
+    const value = group[required];
+    const empty = typeof value === "string" ? value.trim() === "" : value === null || value === undefined;
+    return empty ? required : null;
+}
+
 export const ADAPTER_LABELS: Record<string, string> = {
     platform: "网盘链接",
     openlist_list: "OpenList 目录",

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RowDTO, SinkDTO, StateDTO } from "../types";
+import type { RowDTO, StateDTO } from "../types";
 import { TAXONOMY_LABELS, TAXONOMY_ORDER } from "../types";
-import { generateSink, openSinkDir, pushCompletion, saveRow, scanSinks, type RowPatch } from "../api";
+import { pushCompletion, saveRow, type RowPatch } from "../api";
 import { mergeTermTokens, splitTermInput } from "../../shared/terms";
 import FileServeEditor from "./FileServeEditor";
-import { normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
+import { fieldLabel, groupMissingField, normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
 
 interface Props {
     row: RowDTO;
@@ -151,85 +151,37 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
         return found ? found.name : `#${ref}`;
     };
 
-    // --- 文件补完（completion sink）---------------------------------------
-    // One skeleton per row lives in the settings' work root; the carrier is
-    // filled offline (upload + share links) and pushed as fileserve-only.
-    const [sink, setSink] = useState<SinkDTO | null>(null);
-    const [workRoot, setWorkRoot] = useState<string>("");
-    const loadSink = useCallback(async () => {
-        try {
-            const result = await scanSinks(row.localId);
-            setWorkRoot(result.workRoot);
-            setSink(result.sinks[0] ?? null);
-        } catch {
-            setSink(null);
-        }
-    }, [row.localId]);
-    useEffect(() => {
-        void loadSink();
-    }, [loadSink]);
+    // --- 文件补完 -----------------------------------------------------------
+    // The file list below IS the production aiya_core_fileserve config. The
+    // completion push sends it as a fileserve-only PUT once every group's
+    // required field carries a value and the row differs from the
+    // site-confirmed digest (row.completion, recomputed by the server).
+    const listEntries = Object.entries(draft.fileserve ?? {}).sort(([a], [b]) => Number(a) - Number(b));
+    const listMissing = listEntries.flatMap(([id, group]) => {
+        const field = groupMissingField(group);
+        return field === null ? [] : [`组 #${id} 的「${fieldLabel(field)}」`];
+    });
+    const hasFileserve = listEntries.length > 0;
+    const completion = row.completion;
 
-    const hasFileserve = draft.fileserve !== null && Object.keys(draft.fileserve).length > 0;
-
-    const onGenerateSink = () => {
+    const onPushCompletion = () => {
         void (async () => {
             try {
-                const result = await generateSink(row.localId);
-                notify("ok", `骨架已生成：${result.dirName}`);
-                await loadSink();
-                onEdit();
-            } catch (error) {
-                notify("err", String(error));
-            }
-        })();
-    };
-
-    const onOpenSinkDir = () => {
-        if (!sink) {
-            return;
-        }
-        void (async () => {
-            try {
-                await openSinkDir(sink.dirName);
-            } catch (error) {
-                notify("err", String(error));
-            }
-        })();
-    };
-
-    const onPushSink = () => {
-        if (!sink) {
-            return;
-        }
-        void (async () => {
-            try {
-                const outcome = await pushCompletion([sink.dirName]);
+                // The site call reads the persisted row — flush the debounce first.
+                await persist(draftRef.current);
+                const outcome = await pushCompletion([row.localId]);
                 if (outcome.error) {
                     notify("err", `补完推送失败：${outcome.error}`);
                 } else if (outcome.failed > 0) {
-                    notify("err", `补完推送：成功 ${outcome.pushed}，失败 ${outcome.failed}（${outcome.errors[0]?.message ?? ""}）`);
+                    notify("err", `补完推送：${outcome.errors[0]?.message ?? "失败"}`);
                 } else {
-                    notify("ok", `补完推送：文件列表已写入站点（${outcome.pushed} 条）`);
+                    notify("ok", "补完推送：文件列表已写入站点");
                 }
-                await loadSink();
                 onEdit();
             } catch (error) {
                 notify("err", String(error));
             }
         })();
-    };
-
-    const sinkBadge = (status: SinkDTO["status"]): { label: string; className: string } => {
-        switch (status) {
-            case "ready":
-                return { label: "待推送", className: "bg-blue-100 text-blue-700" };
-            case "pushed":
-                return { label: "已推送", className: "bg-green-100 text-green-700" };
-            case "broken":
-                return { label: "载体损坏", className: "bg-red-100 text-red-700" };
-            default:
-                return { label: "待分享", className: "bg-neutral-100 text-neutral-600" };
-        }
     };
 
     const badges = [
@@ -363,44 +315,35 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
             </label>
 
             <div>
-                <span className="lbl">文件补完（先发帖 · 网盘上传 · 分享链回填 · 异批推送）</span>
+                <span className="lbl">文件补完（网盘上传 · 分享链回填 · 补完推送）</span>
                 {row.postId === null ? (
-                    <p className="text-xs text-neutral-400">这一行还没推送到站点；先推送发布，再生成文件骨架。</p>
-                ) : hasFileserve ? (
-                    <p className="text-xs text-neutral-400">这一行已有文件列表，直接在下方编辑器维护；补完骨架只服务空文件列表的行。</p>
-                ) : workRoot === "" ? (
-                    <p className="text-xs text-neutral-400">先在设置里填好补完工作目录。</p>
-                ) : sink ? (
-                    <div className="flex flex-col gap-1.5">
-                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                            <span className={`px-1.5 rounded ${sinkBadge(sink.status).className}`}>{sinkBadge(sink.status).label}</span>
-                            <span className="font-mono">{sink.dirName}</span>
-                            {sink.carrier && (
-                                <span className="text-neutral-400">
-                                    {sink.carrier.groupsReady}/{sink.carrier.groupsTotal} 组有链接
-                                </span>
-                            )}
-                        </div>
-                        {sink.error && <div className="text-xs text-red-500">{sink.error}</div>}
-                        <div className="flex gap-2">
-                            <button className="btn" disabled={busy} onClick={onOpenSinkDir}>
-                                打开目录
-                            </button>
-                            {sink.status === "ready" && (
-                                <button className="btn btn-primary" disabled={busy} onClick={onPushSink}>
-                                    补完推送此条
-                                </button>
-                            )}
-                        </div>
-                    </div>
+                    <p className="text-xs text-neutral-400">这一行还没推送到站点；先推送发布，再补完文件列表。</p>
+                ) : !hasFileserve ? (
+                    <p className="text-xs text-neutral-400">在下方编辑器添加数据组；每组对应一个网盘分享。</p>
                 ) : (
                     <div className="flex flex-col gap-1.5">
-                        <button className="btn self-start" disabled={busy} onClick={onGenerateSink}>
-                            生成文件骨架
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                            {listMissing.length > 0 ? (
+                                <span className="px-1.5 rounded bg-amber-100 text-amber-700">缺字段</span>
+                            ) : completion.status === "pushed" ? (
+                                <span className="px-1.5 rounded bg-green-100 text-green-700">与站点一致</span>
+                            ) : (
+                                <span className="px-1.5 rounded bg-blue-100 text-blue-700">待推送</span>
+                            )}
+                            <span className="text-neutral-400">{listEntries.length} 组</span>
+                        </div>
+                        {listMissing.length > 0 && (
+                            <div className="text-xs text-amber-600">
+                                {listMissing.join("；")}——补完推送会整行拒绝，先填好再推。
+                            </div>
+                        )}
+                        <button
+                            className="btn btn-primary self-start"
+                            disabled={busy || listMissing.length > 0}
+                            onClick={onPushCompletion}
+                        >
+                            补完推送此行
                         </button>
-                        <p className="text-xs text-neutral-400">
-                            在工作目录下创建以文章命名的上传目录和 fileserve.json 载体；网盘上传并把分享链填回载体后，用「补完推送」写入站点。
-                        </p>
                     </div>
                 )}
             </div>

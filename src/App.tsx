@@ -151,17 +151,17 @@ export default function App() {
             await refresh();
         });
 
-    const onCompletionPush = (dirNames?: string[]) =>
+    const onCompletionPush = (localIds?: number[]) =>
         withBusy(async () => {
-            const outcome = await api.pushCompletion(dirNames);
+            const outcome = await api.pushCompletion(localIds);
             if (outcome.error) {
                 notify("err", `补完推送失败：${outcome.error}`);
             } else if (outcome.failed > 0) {
-                notify("err", `补完推送完成：成功 ${outcome.pushed}，失败 ${outcome.failed}（详情见行内错误）`);
+                notify("err", `补完推送：成功 ${outcome.pushed}，失败 ${outcome.failed}（${outcome.errors[0]?.message ?? ""}）`);
             } else if (outcome.pushed === 0) {
-                notify("ok", "补完推送：没有就绪的骨架（都还没有分享链接，或都已推送过）。");
+                notify("ok", "补完推送：没有可推送的行（文件列表都还没填链接，或都已推送过）。");
             } else {
-                notify("ok", `补完推送完成：${outcome.pushed} 份文件列表已写入站点`);
+                notify("ok", `补完推送完成：${outcome.pushed} 行的文件列表已写入站点`);
             }
             await refresh();
         });

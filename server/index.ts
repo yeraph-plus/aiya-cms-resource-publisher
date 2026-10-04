@@ -1,6 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
-import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { existsSync } from "node:fs";
@@ -26,11 +25,10 @@ import {
 } from "./db.js";
 import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
-import { coerceDirNameMode, generateSink, listSinks, parseTemplate } from "./carrier.js";
-import { runCompletionPush } from "./completion.js";
+import { completionState, runCompletionPush } from "./completion.js";
 import { isOurStateEndpoint, killTree, listenerPid } from "./portguard.js";
 import { getProgress, setProgress } from "./progress.js";
-import { getResource, normalizeSiteUrl, parseSlugFromLink, ping, WpError } from "./wp.js";
+import { normalizeSiteUrl, ping, WpError } from "./wp.js";
 import { parseCsv } from "../shared/csv.js";
 import { buildImportRows, guessMapping, TAXONOMY_ORDER, type ImportMapping } from "../shared/import.js";
 import { normalizeConfig } from "../shared/fileserve.js";
@@ -55,6 +53,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         ...saved,
         terms: getTermRefs(saved.localId),
         fileserveParsed: parseFileserve(saved.fileserve),
+        completion: completionState(saved),
     });
 
 function errorMessage(error: unknown): string {
@@ -78,22 +77,20 @@ function errorMessage(error: unknown): string {
         }
     }
 
-        return {
-            settings: {
-                siteUrl: settings.siteUrl,
-                username: settings.username,
-                hasPassword: settings.appPassword !== "",
-                proxyUrl: settings.proxyUrl,
-                defaultAuthorId: settings.defaultAuthorId,
-                lastSyncCursor: settings.lastSyncCursor,
-                workRoot: settings.workRoot,
-                dirNameMode: settings.dirNameMode,
-                fileserveTemplate: settings.fileserveTemplate,
-            },
-            authors: listAuthors(),
-            terms,
-            posts: listPosts().map(rowWithTerms),
-        };
+            return {
+                settings: {
+                    siteUrl: settings.siteUrl,
+                    username: settings.username,
+                    hasPassword: settings.appPassword !== "",
+                    proxyUrl: settings.proxyUrl,
+                    defaultAuthorId: settings.defaultAuthorId,
+                    lastSyncCursor: settings.lastSyncCursor,
+                    workRoot: settings.workRoot,
+                },
+                authors: listAuthors(),
+                terms,
+                posts: listPosts().map(rowWithTerms),
+            };
 });
 
     app.put("/api/settings", async (request, reply) => {
@@ -115,23 +112,6 @@ function errorMessage(error: unknown): string {
         }
         if (body.workRoot !== undefined) {
             setSetting("workRoot", String(body.workRoot ?? "").trim());
-        }
-        if (body.dirNameMode !== undefined) {
-            const mode = String(body.dirNameMode);
-            if (!["id", "id-slug", "slug"].includes(mode)) {
-                return reply.code(400).send({ error: "目录命名模式无效。" });
-            }
-            setSetting("dirNameMode", mode);
-        }
-        if (body.fileserveTemplate !== undefined) {
-            const raw = body.fileserveTemplate === null ? null : String(body.fileserveTemplate);
-            if (raw !== null) {
-                const template = parseTemplate(raw);
-                if (template.error !== null) {
-                    return reply.code(400).send({ error: template.error });
-                }
-            }
-            setSetting("fileserveTemplate", raw);
         }
         return reply.code(200).send({ ok: true });
     });
@@ -408,103 +388,23 @@ function errorMessage(error: unknown): string {
         }
     });
 
-    // --- FileServe completion flow (文件补完) -------------------------------
+    // --- FileServe completion push (文件补完) --------------------------------
 
-    app.post("/api/fileserve-sink/generate", async (request, reply) => {
-        const body = (request.body ?? {}) as { localId?: unknown };
-        const localId = Number(body.localId);
-        if (!Number.isInteger(localId)) {
-            return reply.code(400).send({ error: "缺少 localId。" });
-        }
-        const row = getPost(localId);
-        if (!row) {
-            return reply.code(404).send({ error: "本地行不存在。" });
-        }
-        const settings = getSettings();
-        const workRoot = settings.workRoot.trim();
-        if (workRoot === "") {
-            return reply.code(400).send({ error: "先在设置里填好补完工作目录。" });
-        }
-        const template = parseTemplate(settings.fileserveTemplate);
-        if (template.error !== null) {
-            return reply.code(400).send({ error: template.error });
-        }
-        // The slug is decoration for the dir name; when the row predates the
-        // slug column, one fetch backfills it. Failure falls back to the id.
-        let slug = row.slug;
-        if (slug === null && row.postId !== null) {
-            try {
-                const item = await getResource(
-                    {
-                        siteUrl: settings.siteUrl,
-                        username: settings.username,
-                        appPassword: settings.appPassword,
-                        proxyUrl: settings.proxyUrl,
-                    },
-                    row.postId,
-                );
-                slug = parseSlugFromLink(item.link);
-                if (slug !== null) {
-                    updatePostRow(localId, { slug });
-                }
-            } catch {
-                // dirNameFor falls back to the post id without a slug
-            }
-        }
-        try {
-            const result = generateSink(row, slug, {
-                workRoot,
-                dirNameMode: coerceDirNameMode(settings.dirNameMode),
-                template: template.template,
-            });
-            return { ok: true, dirName: result.dirName, path: result.path };
-        } catch (error) {
-            return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
-        }
-    });
-
-    app.get("/api/fileserve-sink/scan", async (request) => {
-        const settings = getSettings();
-        const query = request.query as { localId?: string };
-        const localId = query.localId !== undefined && query.localId !== "" ? Number(query.localId) : null;
-        const sinks = listSinks(settings.workRoot).filter(
-            (sink) => localId === null || !Number.isInteger(localId) || sink.carrier?.localId === localId,
-        );
-        return { workRoot: settings.workRoot, sinks };
-    });
-
-    app.post("/api/fileserve-sink/push", async (request, reply) => {
-        const body = (request.body ?? {}) as { dirNames?: unknown };
+    app.post("/api/completion/push", async (request, reply) => {
+        const body = (request.body ?? {}) as { localIds?: unknown };
         if (siteOperation !== null) {
             return slotBusy(reply);
         }
         siteOperation = "completion";
         try {
-            const dirNames = Array.isArray(body.dirNames) ? body.dirNames.map(String) : undefined;
-            return await runCompletionPush(dirNames);
+            const localIds = Array.isArray(body.localIds)
+                ? body.localIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)
+                : undefined;
+            return await runCompletionPush(localIds);
         } finally {
             setProgress(null);
             siteOperation = null;
         }
-    });
-
-    app.post("/api/fileserve-sink/open", async (request, reply) => {
-        const body = (request.body ?? {}) as { dirName?: unknown };
-        const dirName = String(body.dirName ?? "");
-        if (dirName === "" || dirName === "." || dirName === ".." || !/^[A-Za-z0-9._-]+$/.test(dirName)) {
-            return reply.code(400).send({ error: "目录名无效。" });
-        }
-        const workRoot = getSettings().workRoot.trim();
-        if (workRoot === "") {
-            return reply.code(400).send({ error: "先在设置里填好补完工作目录。" });
-        }
-        const dir = path.join(workRoot, dirName);
-        if (!existsSync(dir)) {
-            return reply.code(404).send({ error: "目录不存在。" });
-        }
-        const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
-        spawn(command, [dir], { detached: true, stdio: "ignore" }).unref();
-        return { ok: true };
     });
 
     app.get("/api/progress", async () => getProgress());

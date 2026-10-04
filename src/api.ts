@@ -1,4 +1,4 @@
-import type { LogDTO, RowDTO, ScanSinksDTO, SinkDTO, StateDTO } from "./types";
+import type { LogDTO, RowDTO, StateDTO } from "./types";
 
 async function json<T>(response: Response): Promise<T> {
     if (!response.ok) {
@@ -57,8 +57,6 @@ export interface SaveSettingsPayload {
     proxyUrl?: string;
     defaultAuthorId?: number | null;
     workRoot?: string;
-    dirNameMode?: string;
-    fileserveTemplate?: string | null;
 }
 
 export function saveSettings(payload: SaveSettingsPayload): Promise<{ ok: boolean }> {
@@ -163,33 +161,15 @@ export function clearLogs(): Promise<{ ok: boolean; cleared: number }> {
     return call<{ ok: boolean; cleared: number }>("/api/logs/clear", "POST", {});
 }
 
-export interface GenerateSinkDTO {
-    ok: boolean;
-    dirName: string;
-    path: string;
-}
-
-export function generateSink(localId: number): Promise<GenerateSinkDTO> {
-    return call<GenerateSinkDTO>("/api/fileserve-sink/generate", "POST", { localId });
-}
-
-export function scanSinks(localId?: number): Promise<ScanSinksDTO> {
-    const query = localId !== undefined ? `?localId=${localId}` : "";
-    return call<ScanSinksDTO>(`/api/fileserve-sink/scan${query}`, "GET");
-}
-
 export interface CompletionOutcomeDTO {
     ok: boolean;
     error: string | null;
     pushed: number;
     failed: number;
-    errors: { dirName: string; title: string; message: string }[];
+    errors: { localId: number; postId: number | null; title: string; message: string }[];
 }
 
-export function pushCompletion(dirNames?: string[]): Promise<CompletionOutcomeDTO> {
-    return call<CompletionOutcomeDTO>("/api/fileserve-sink/push", "POST", { dirNames });
-}
-
-export function openSinkDir(dirName: string): Promise<{ ok: boolean }> {
-    return call<{ ok: boolean }>("/api/fileserve-sink/open", "POST", { dirName });
+/** Pushes the file lists of the given rows (or every row with new ones). */
+export function pushCompletion(localIds?: number[]): Promise<CompletionOutcomeDTO> {
+    return call<CompletionOutcomeDTO>("/api/completion/push", "POST", { localIds });
 }
