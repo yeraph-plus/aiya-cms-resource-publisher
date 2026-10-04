@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AIYA 网盘分享回填（百度）
 // @namespace    aiya-netdisk
-// @version      0.2.0
+// @version      0.2.1
 // @description  在百度网盘 web 端定位发帖器同名目录、创建分享并把链接回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
 // @match        https://pan.baidu.com/*
 // @grant        GM_xmlhttpRequest
@@ -343,9 +343,12 @@
     }
 
     // ---------- 挂钩：百度网盘顶部导航 ---------------------------------------
-    // The trigger lives in the page's top bar (.wp-s-header) as "AIYA 挂钩";
-    // SPA re-renders replace the bar, so a guard re-attaches it. Without the
-    // bar (page redesign) it falls back to a fixed position button.
+    // The trigger sits in the top bar right after the netdisk LOGO
+    // (.wp-s-header__left > a), dark-on-light because the bar renders over a
+    // white page, with a live dot mirroring the publisher's reachability
+    // (polled through the CORS-pinned lane endpoint). SPA re-renders replace
+    // the bar, so a guard re-attaches; without the bar it falls back to a
+    // fixed position button.
     let panelVisible = false;
 
     function togglePanel() {
@@ -356,35 +359,57 @@
         }
     }
 
-    function buildTrigger(variant) {
-        const hook = document.createElement("div");
-        hook.id = variant === "bar" ? "aiya-hook" : "aiya-hook-fallback";
-        hook.textContent = "AIYA 挂钩";
-        hook.onclick = togglePanel;
-        if (variant === "bar") {
-            hook.style.cssText = [
-                "cursor:pointer", "padding:0 16px", "height:100%", "display:flex", "align-items:center",
-                "font-size:13px", "color:#fff", "background:rgba(255,255,255,.14)", "user-select:none",
-            ].join(";");
-            hook.onmouseenter = () => (hook.style.background = "rgba(255,255,255,.28)");
-            hook.onmouseleave = () => (hook.style.background = "rgba(255,255,255,.14)");
-        } else {
-            hook.style.cssText = [
-                "position:fixed", "right:16px", "top:12px", "z-index:999999", "cursor:pointer",
-                "background:#06a7ff", "color:#fff", "padding:6px 12px", "border-radius:16px",
-                "font:bold 12px system-ui", "box-shadow:0 2px 8px rgba(0,0,0,.25)",
-            ].join(";");
+    function refreshPublisherStatus() {
+        const dot = document.getElementById("aiya-hook-dot");
+        if (!dot) {
+            return;
         }
+        dot.style.color = "#bbb";
+        dot.title = "正在探测发帖器…";
+        publisherFetch("/api/netdisk/queue")
+            .then(() => {
+                dot.style.color = "#22b573";
+                dot.title = "本机发帖器在线";
+            })
+            .catch(() => {
+                dot.style.color = "#d84343";
+                dot.title = "本机发帖器离线（未启动？）";
+            });
+    }
+
+    function buildHook() {
+        const hook = document.createElement("div");
+        hook.id = "aiya-hook";
+        hook.title = "AIYA 网盘分享回填";
+        hook.innerHTML = 'AIYA 挂钩 <span id="aiya-hook-dot" style="font-size:10px">●</span>';
+        hook.style.cssText = [
+            "cursor:pointer", "display:inline-flex", "align-items:center", "gap:4px",
+            "flex:none", "margin-left:6px", "padding:5px 12px", "border-radius:6px",
+            "font-size:13px", "color:#333", "background:rgba(0,0,0,.06)", "user-select:none",
+        ].join(";");
+        hook.onmouseenter = () => (hook.style.background = "rgba(0,0,0,.12)");
+        hook.onmouseleave = () => (hook.style.background = "rgba(0,0,0,.06)");
+        hook.onclick = togglePanel;
         return hook;
     }
 
     function mountHook() {
-        const host = document.querySelector(".wp-s-header") ?? document.querySelector(".wp-s-header-wrapper");
-        if (host && !document.getElementById("aiya-hook") && !document.getElementById("aiya-hook-fallback")) {
-            host.appendChild(buildTrigger("bar"));
-        } else if (!host && !document.getElementById("aiya-hook-fallback") && !document.getElementById("aiya-hook")) {
-            document.body.appendChild(buildTrigger("fallback"));
+        if (document.getElementById("aiya-hook")) {
+            return;
         }
+        const header = document.querySelector(".wp-s-header");
+        const left = header?.querySelector(".wp-s-header__left") ?? null;
+        const hook = buildHook();
+        if (left) {
+            // The header is a flex row (left / center / right): become its
+            // second child so the hook sits right after the LOGO block.
+            left.insertAdjacentElement("afterend", hook);
+        } else {
+            // Page redesign fallback: a fixed button that stays readable.
+            hook.style.cssText += ";position:fixed;right:16px;top:12px;z-index:999999;background:#fff;border:1px solid #ddd;box-shadow:0 2px 8px rgba(0,0,0,.15)";
+            document.body.appendChild(hook);
+        }
+        refreshPublisherStatus();
     }
 
     const mount = () => {
@@ -392,6 +417,7 @@
         renderPanel();
         mountHook();
         setInterval(mountHook, 2000);
+        setInterval(refreshPublisherStatus, 15000);
     };
     if (document.body) {
         mount();
