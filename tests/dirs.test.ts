@@ -38,9 +38,12 @@ beforeEach(() => {
 });
 
 describe("staging dir naming", () => {
-    it("sanitizes illegal characters into spaces and keeps CJK", () => {
-        expect(stagingDirName(501, 'A/B:C*D?"E<F>G|H')).toBe("501-A B C D E F G H");
-        expect(stagingDirName(501, "测试 文章")).toBe("501-测试 文章");
+    it("pads the id to 5 digits, sanitizes illegal characters and keeps CJK", () => {
+        expect(stagingDirName(501, 'A/B:C*D?"E<F>G|H')).toBe("00501-A B C D E F G H");
+        expect(stagingDirName(501, "测试 文章")).toBe("00501-测试 文章");
+        expect(stagingDirName(7, "标题")).toBe("00007-标题");
+        // Ids beyond five digits are not truncated.
+        expect(stagingDirName(123456, "标题").startsWith("123456-")).toBe(true);
     });
 
     it("truncates the title to the budget at code points", () => {
@@ -51,41 +54,43 @@ describe("staging dir naming", () => {
     });
 
     it("strips trailing dots and spaces, and falls back on an empty title", () => {
-        expect(stagingDirName(7, "标题...")).toBe("7-标题");
-        expect(stagingDirName(7, "   ")).toBe("7-untitled");
+        expect(stagingDirName(7, "标题...")).toBe("00007-标题");
+        expect(stagingDirName(7, "   ")).toBe("00007-untitled");
     });
 });
 
 describe("staging dir ensure", () => {
-    it("creates the folder on first call and claims it on every later one", async () => {
+    it("creates the padded folder on first call and claims it on every later one", async () => {
         const localId = db.insertPost({ status: "publish", title: "测试 文章", postId: 501 });
 
         const res = await app.inject({ method: "POST", url: "/api/fileserve-dir/ensure", payload: { localId } });
         const body = res.json();
         expect(body.status).toBe("created");
-        expect(body.name).toBe("501-测试 文章");
-        expect(existsSync(join(workRoot, "501-测试 文章"))).toBe(true);
+        expect(body.name).toBe("00501-测试 文章");
+        expect(existsSync(join(workRoot, "00501-测试 文章"))).toBe(true);
 
         const again = await app.inject({ method: "POST", url: "/api/fileserve-dir/ensure", payload: { localId } });
         expect(again.json().status).toBe("claimed");
-        expect(again.json().name).toBe("501-测试 文章");
+        expect(again.json().name).toBe("00501-测试 文章");
 
         // The lookup endpoint reads the filesystem, nothing else.
         const info = await app.inject({ method: "GET", url: `/api/fileserve-dir/${localId}` });
-        expect(info.json().name).toBe("501-测试 文章");
+        expect(info.json().name).toBe("00501-测试 文章");
     });
 
-    it("claims a folder by its leading id, and only the exact id", async () => {
+    it("claims only the exact padded id; longer ids and other shapes never match", async () => {
         const localId = db.insertPost({ status: "publish", title: "测试 文章", postId: 502 });
-        mkdirSync(join(workRoot, "502-renamed-by-hand"));
-        // A longer id sharing the digit prefix must not be claimed: the dash
-        // delimiter is what makes the leading id unambiguous.
+        mkdirSync(join(workRoot, "00502-renamed-by-hand"));
+        // A longer id sharing the digits must not be claimed, and the legacy
+        // unpadded shape is not recognized either — the padded form is the
+        // only name this feature has ever had.
         mkdirSync(join(workRoot, "5025-similar"));
+        mkdirSync(join(workRoot, "502-legacy"));
 
         const res = await app.inject({ method: "POST", url: "/api/fileserve-dir/ensure", payload: { localId } });
         const body = res.json();
         expect(body.status).toBe("claimed");
-        expect(body.name).toBe("502-renamed-by-hand");
+        expect(body.name).toBe("00502-renamed-by-hand");
     });
 
     it("blocks unpublished rows and an unconfigured root without touching disk", async () => {
@@ -99,14 +104,14 @@ describe("staging dir ensure", () => {
         const res2 = await app.inject({ method: "POST", url: "/api/fileserve-dir/ensure", payload: { localId: published } });
         expect(res2.json().status).toBe("blocked");
         expect(res2.json().reason).toContain("自动创建文件夹位置");
-        expect(existsSync(join(workRoot, "503-行"))).toBe(false);
+        expect(existsSync(join(workRoot, "00503-行"))).toBe(false);
     });
 
     it("records nothing: deleting the row leaves the folder and no trace in the db", async () => {
         const localId = db.insertPost({ status: "publish", title: "行", postId: 504 });
         await app.inject({ method: "POST", url: "/api/fileserve-dir/ensure", payload: { localId } });
         await app.inject({ method: "DELETE", url: `/api/posts/${localId}` });
-        expect(existsSync(join(workRoot, "504-行"))).toBe(true);
+        expect(existsSync(join(workRoot, "00504-行"))).toBe(true);
         // The staging dirs are not modelled in SQL at all — no table to hold
         // them means nothing can go stale.
         const tables = (db.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map(
@@ -117,7 +122,7 @@ describe("staging dir ensure", () => {
         // A future row for the same post id claims the folder by prefix.
         const again = db.insertPost({ status: "publish", title: "行", postId: 504 });
         const res = await app.inject({ method: "POST", url: "/api/fileserve-dir/ensure", payload: { localId: again } });
-        expect(res.json()).toMatchObject({ status: "claimed", name: "504-行" });
+        expect(res.json()).toMatchObject({ status: "claimed", name: "00504-行" });
     });
 
     it("answers 400 on open when the prerequisites are missing", async () => {

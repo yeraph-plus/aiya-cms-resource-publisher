@@ -16,19 +16,26 @@ import { getPost, getSetting, logEvent } from "./db.js";
  * cap and comfortable inside MAX_PATH with any sane root. */
 const MAX_NAME = 80;
 
+/** The post id segment, zero-padded to 5 digits so file managers sort the
+ * folders in posting order. */
+export function stagingId(postId: number): string {
+    return String(postId).padStart(5, "0");
+}
+
 export function stagingDirName(postId: number, title: string): string {
+    const id = stagingId(postId);
     const cleaned = title
         .replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ")
         .replace(/\s+/g, " ")
         .replace(/[ .]+$/, "")
         .trim();
-    const budget = MAX_NAME - String(postId).length - 1;
+    const budget = MAX_NAME - id.length - 1;
     // Array.from walks code points, so astral chars (emoji) are not split.
     const truncated = Array.from(cleaned)
         .slice(0, Math.max(1, budget))
         .join("")
         .trim();
-    return `${postId}-${truncated === "" ? "untitled" : truncated}`;
+    return `${id}-${truncated === "" ? "untitled" : truncated}`;
 }
 
 export interface EnsureResult {
@@ -42,18 +49,19 @@ function blocked(reason: string): EnsureResult {
     return { status: "blocked", dir: null, name: null, reason };
 }
 
-/** The existing folder carrying the post's id, or null. The dash delimiter
- * keeps id 50 from claiming 501's folder; the scan is sorted so a copied
- * folder pair resolves deterministically. */
+/** The existing folder carrying the post's padded id, or null. The id
+ * segment must equal `{帖子ID}` exactly (5-digit zero-padded) or open with
+ * `{帖子ID}-` — the dash delimiter keeps 00502 from claiming 005025's
+ * folder. Sorted so a copied pair resolves deterministically. */
 export function findStagingDir(postId: number): { dir: string; name: string } | null {
     const workRoot = (getSetting("workRoot") ?? "").trim();
     if (workRoot === "" || !existsSync(workRoot)) {
         return null;
     }
-    const plain = String(postId);
-    const prefix = `${plain}-`;
+    const id = stagingId(postId);
+    const prefix = `${id}-`;
     const match = readdirSync(workRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && (entry.name === plain || entry.name.startsWith(prefix)))
+        .filter((entry) => entry.isDirectory() && (entry.name === id || entry.name.startsWith(prefix)))
         .map((entry) => entry.name)
         .sort()[0];
     return match ? { dir: join(workRoot, match), name: match } : null;
