@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AIYA 网盘分享回填（百度）
 // @namespace    aiya-netdisk
-// @version      0.2.1
+// @version      0.3.0
 // @description  在百度网盘 web 端定位发帖器同名目录、创建分享并把链接回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
 // @match        https://pan.baidu.com/*
 // @grant        GM_xmlhttpRequest
@@ -19,14 +19,14 @@
     const cfg = {
         publisher: GM_getValue("publisher", "http://127.0.0.1:5175"),
         rootDir: GM_getValue("rootDir", "/"),
-        period: GM_getValue("period", "0"), // 分享有效期（天）；0 = 永久（需会员，过期自动回落提示）
-        autoRun: false,
+        period: GM_getValue("period", "0"), // 分享有效期（天）；0 = 永久（需会员）
     };
     const saveCfg = () => {
         GM_setValue("publisher", cfg.publisher);
         GM_setValue("rootDir", cfg.rootDir);
         GM_setValue("period", cfg.period);
     };
+    const publisherHost = () => cfg.publisher.replace(/^https?:\/\//, "");
 
     // ---------- 基础工具 -----------------------------------------------------
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -108,7 +108,7 @@
     }
 
     /** The staged folder's entry under the configured root: depth-1 listing
-     * first (deterministic), the netdisk search as the fallback. */
+     * first (deterministic). */
     async function findFolder(dirName) {
         for (let page = 1; ; page += 1) {
             const result = await apiJson("/api/list", {
@@ -197,6 +197,7 @@
             return;
         }
         running = true;
+        renderHookText();
         try {
             for (;;) {
                 const pending = queue.filter((item) => !item.status || item.status === "fail");
@@ -217,16 +218,17 @@
             }
         } finally {
             running = false;
+            renderHookText();
             renderControls();
         }
     }
 
-    // ---------- 面板 UI ------------------------------------------------------
+    // ---------- 面板（普通气泡：点挂钩开，点外面关） --------------------------
     let queue = [];
     const panel = document.createElement("div");
     panel.id = "aiya-netdisk-panel";
     panel.style.cssText = [
-        "position:fixed", "right:16px", "top:64px", "z-index:999999", "width:420px",
+        "position:fixed", "right:16px", "top:64px", "z-index:2147483000", "width:420px",
         "background:#fff", "border:1px solid #ddd", "border-radius:8px", "box-shadow:0 4px 16px rgba(0,0,0,.18)",
         "font:12px/1.5 system-ui,sans-serif", "color:#333", "display:none",
     ].join(";");
@@ -238,17 +240,23 @@
     }
 
     function renderControls() {
-        panel.querySelector("#aiya-run").textContent = running ? "停止" : "开始处理";
+        const run = panel.querySelector("#aiya-run");
+        if (run) {
+            run.textContent = running ? "停止" : "开始处理";
+        }
     }
 
     function renderQueue() {
         const box = panel.querySelector("#aiya-queue");
+        if (!box) {
+            return;
+        }
         box.innerHTML = "";
         if (queue.length === 0) {
             box.innerHTML = '<div style="color:#999;padding:6px 2px">队列为空：在发帖器里给已上线行添加空链接的网盘组后点「刷新队列」。</div>';
             return;
         }
-        for (const item of queue) {
+        queue.forEach((item, index) => {
             const row = document.createElement("div");
             row.style.cssText = "padding:5px 2px;border-bottom:1px solid #f2f2f2";
             const color = item.status === "done" ? "#2e7d32" : item.status === "fail" ? "#c62828" : item.status === "run" ? "#1565c0" : "#666";
@@ -256,32 +264,18 @@
                 `<div style="display:flex;gap:6px;align-items:baseline">` +
                 `<b style="flex:none">${item.dirName}</b>` +
                 `<span style="color:#888;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">组 #${item.groupId} · ${item.groupTitle}</span>` +
-                `<button data-act="one" style="flex:none;cursor:pointer">处理</button></div>` +
+                `<button data-aiya-act="process-one" data-aiya-arg="${index}" style="flex:none;cursor:pointer">处理</button></div>` +
                 `<div style="color:${color};white-space:normal">${item.statusText ?? "待处理"}</div>`;
-            row.querySelector("button").onclick = () => {
-                if (running) {
-                    return;
-                }
-                setStatus(item, "", "待处理");
-                running = true;
-                processItem(item)
-                    .catch((error) => setStatus(item, "fail", String(error.message ?? error)))
-                    .finally(() => {
-                        running = false;
-                        renderControls();
-                    });
-            };
             box.appendChild(row);
-        }
+        });
     }
 
     function renderPanel() {
         panel.innerHTML = `
             <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #eee">
                 <b>AIYA 网盘回填</b>
-                <span id="aiya-close" style="margin-left:auto;cursor:pointer;color:#999">—</span>
             </div>
-            <div id="aiya-body" style="padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+            <div style="padding:8px 10px;display:flex;flex-direction:column;gap:6px">
                 <div style="display:flex;gap:6px;align-items:center">
                     <label style="flex:none">网盘根目录</label>
                     <input id="aiya-root" value="${cfg.rootDir}" style="flex:1;min-width:0">
@@ -298,98 +292,94 @@
                     </select>
                 </div>
                 <div style="display:flex;gap:6px;align-items:center">
-                    <button id="aiya-refresh" style="cursor:pointer">刷新队列</button>
-                    <button id="aiya-run" style="cursor:pointer">开始处理</button>
+                    <button id="aiya-refresh" data-aiya-act="refresh" style="cursor:pointer">刷新队列</button>
+                    <button id="aiya-run" data-aiya-act="run" style="cursor:pointer">开始处理</button>
                     <span id="aiya-msg" style="color:#888;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"></span>
                 </div>
                 <div id="aiya-queue" style="max-height:260px;overflow:auto"></div>
             </div>`;
-        panel.querySelector("#aiya-close").onclick = () => {
-            panel.querySelector("#aiya-body").style.display = panel.querySelector("#aiya-body").style.display === "none" ? "flex" : "none";
-        };
-        panel.querySelector("#aiya-root").onchange = (event) => {
+        const root = panel.querySelector("#aiya-root");
+        root.onchange = (event) => {
             cfg.rootDir = event.target.value.trim() || "/";
             saveCfg();
             bdstoken = null;
         };
-        panel.querySelector("#aiya-pub").onchange = (event) => {
+        const pub = panel.querySelector("#aiya-pub");
+        pub.onchange = (event) => {
             cfg.publisher = event.target.value.trim().replace(/\/+$/, "");
             saveCfg();
+            renderHookText();
         };
-        panel.querySelector("#aiya-period").value = cfg.period;
-        panel.querySelector("#aiya-period").onchange = (event) => {
+        const period = panel.querySelector("#aiya-period");
+        period.value = cfg.period;
+        period.onchange = (event) => {
             cfg.period = event.target.value;
             saveCfg();
-        };
-        panel.querySelector("#aiya-refresh").onclick = async () => {
-            try {
-                const data = await publisherFetch("/api/netdisk/queue");
-                queue = data.queue.map((item) => ({ ...item }));
-                renderQueue();
-            } catch (error) {
-                panel.querySelector("#aiya-msg").textContent = String(error.message ?? error);
-            }
-        };
-        panel.querySelector("#aiya-run").onclick = () => {
-            if (running) {
-                running = false;
-                renderControls();
-                return;
-            }
-            void runQueue();
         };
         renderQueue();
         renderControls();
     }
 
-    // ---------- 挂钩：百度网盘顶部导航 ---------------------------------------
-    // The trigger sits in the top bar right after the netdisk LOGO
-    // (.wp-s-header__left > a), dark-on-light because the bar renders over a
-    // white page, with a live dot mirroring the publisher's reachability
-    // (polled through the CORS-pinned lane endpoint). SPA re-renders replace
-    // the bar, so a guard re-attaches; without the bar it falls back to a
-    // fixed position button.
-    let panelVisible = false;
+    function refreshQueue() {
+        return publisherFetch("/api/netdisk/queue")
+            .then((data) => {
+                queue = data.queue.map((item) => ({ ...item }));
+                renderQueue();
+            })
+            .catch((error) => {
+                const msg = panel.querySelector("#aiya-msg");
+                if (msg) {
+                    msg.textContent = String(error.message ?? error);
+                }
+            });
+    }
 
-    function togglePanel() {
-        panelVisible = !panelVisible;
-        panel.style.display = panelVisible ? "block" : "none";
-        if (panelVisible && !panel.querySelector("#aiya-queue").childElementCount) {
-            panel.querySelector("#aiya-refresh").click();
+    function showPanel() {
+        panel.style.display = "block";
+        void refreshQueue();
+    }
+
+    function hidePanel() {
+        panel.style.display = "none";
+    }
+
+    // ---------- 挂钩：LOGO 后的纯文本，直接显示发帖器状态 --------------------
+    let online = null; // null = 检测中
+
+    function renderHookText() {
+        const hook = document.getElementById("aiya-hook");
+        if (!hook) {
+            return;
         }
+        const state = running ? "处理中" : online === null ? "检测中" : online ? "已连接" : "未连接";
+        hook.textContent = `${publisherHost()} - ${state}`;
+        hook.title = online ? `本机发帖器：${state}` : "正在探测本机发帖器…";
     }
 
     function refreshPublisherStatus() {
-        const dot = document.getElementById("aiya-hook-dot");
-        if (!dot) {
-            return;
-        }
-        dot.style.color = "#bbb";
-        dot.title = "正在探测发帖器…";
         publisherFetch("/api/netdisk/queue")
             .then(() => {
-                dot.style.color = "#22b573";
-                dot.title = "本机发帖器在线";
+                online = true;
             })
             .catch(() => {
-                dot.style.color = "#d84343";
-                dot.title = "本机发帖器离线（未启动？）";
+                online = false;
+            })
+            .finally(() => {
+                renderHookText();
             });
     }
 
     function buildHook() {
         const hook = document.createElement("div");
         hook.id = "aiya-hook";
-        hook.title = "AIYA 网盘分享回填";
-        hook.innerHTML = 'AIYA 挂钩 <span id="aiya-hook-dot" style="font-size:10px">●</span>';
+        // space-between distributes spare space around every extra flex
+        // child (the hook rendered mid-bar); the auto right margin soaks the
+        // free space up so the hook hugs the LOGO.
         hook.style.cssText = [
-            "cursor:pointer", "display:inline-flex", "align-items:center", "gap:4px",
-            "flex:none", "margin-left:6px", "padding:5px 12px", "border-radius:6px",
-            "font-size:13px", "color:#333", "background:rgba(0,0,0,.06)", "user-select:none",
+            "cursor:pointer", "flex:none", "margin-left:10px", "margin-right:auto",
+            "padding:4px 2px", "font-size:13px", "color:#333", "user-select:none",
         ].join(";");
-        hook.onmouseenter = () => (hook.style.background = "rgba(0,0,0,.12)");
-        hook.onmouseleave = () => (hook.style.background = "rgba(0,0,0,.06)");
-        hook.onclick = togglePanel;
+        hook.setAttribute("data-aiya-act", "toggle");
         return hook;
     }
 
@@ -406,11 +396,87 @@
             left.insertAdjacentElement("afterend", hook);
         } else {
             // Page redesign fallback: a fixed button that stays readable.
-            hook.style.cssText += ";position:fixed;right:16px;top:12px;z-index:999999;background:#fff;border:1px solid #ddd;box-shadow:0 2px 8px rgba(0,0,0,.15)";
+            hook.style.cssText += ";position:fixed;right:16px;top:12px;z-index:2147483000;background:#fff;border:1px solid #ddd;padding:6px 12px;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.15)";
             document.body.appendChild(hook);
         }
+        renderHookText();
         refreshPublisherStatus();
     }
+
+    // ---------- 事件分派（window 捕获阶段，页面无法吞掉我们的点击） -----------
+    // Big SPAs register document-level capture handlers that can swallow
+    // synthetic clicks; window captures BEFORE document, so our subtree is
+    // dispatched here and the page never sees those events.
+    function dispatchAct(act, arg) {
+        switch (act) {
+            case "toggle":
+                panel.style.display === "block" ? hidePanel() : showPanel();
+                break;
+            case "refresh":
+                void refreshQueue();
+                break;
+            case "run":
+                if (running) {
+                    running = false;
+                    renderControls();
+                } else {
+                    void runQueue();
+                }
+                break;
+            case "process-one": {
+                const item = queue[Number(arg)];
+                if (!item || running) {
+                    return;
+                }
+                setStatus(item, "", "待处理");
+                running = true;
+                renderHookText();
+                processItem(item)
+                    .catch((error) => setStatus(item, "fail", String(error.message ?? error)))
+                    .finally(() => {
+                        running = false;
+                        renderHookText();
+                        renderControls();
+                    });
+                break;
+            }
+        }
+    }
+
+    window.addEventListener(
+        "click",
+        (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (!target || !target.closest("#aiya-netdisk-panel, #aiya-hook")) {
+                return;
+            }
+            const act = target.closest("[data-aiya-act]");
+            if (act) {
+                event.preventDefault();
+                event.stopPropagation();
+                dispatchAct(act.getAttribute("data-aiya-act"), act.getAttribute("data-aiya-arg") ?? undefined);
+            }
+        },
+        true,
+    );
+
+    // A plain bubble: any mousedown outside hook + panel hides it.
+    window.addEventListener(
+        "mousedown",
+        (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (!target) {
+                return;
+            }
+            if (target.closest("#aiya-netdisk-panel") || target.closest("#aiya-hook")) {
+                return;
+            }
+            if (panel.style.display === "block") {
+                hidePanel();
+            }
+        },
+        true,
+    );
 
     const mount = () => {
         document.body.appendChild(panel);
