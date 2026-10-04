@@ -115,6 +115,22 @@ export default function FileServeEditor({ config, onChange, onGroupAdded }: Prop
                                     </label>
                                 );
                             })}
+                            {/* The per-group 推送 switch, styled as one more
+                                field cell: unchecked = local draft, never
+                                pushed; checked = rides with the main push. */}
+                            <div className="block">
+                                <span className="lbl">推送</span>
+                                <label className="inline-flex items-center gap-1.5 cursor-pointer mt-0.5">
+                                    <input
+                                        type="checkbox"
+                                        checked={group.push !== false}
+                                        onChange={(event) => setField(id, "push", event.target.checked)}
+                                    />
+                                    <span className={group.push === false ? "text-neutral-400" : "text-neutral-700"}>
+                                        {group.push === false ? "草稿（不推送）" : "随主推送"}
+                                    </span>
+                                </label>
+                            </div>
                         </div>
                     </div>
                 );
@@ -126,7 +142,7 @@ export default function FileServeEditor({ config, onChange, onGroupAdded }: Prop
                         + 添加组
                     </button>
                     {entries.length === 0 && (
-                        <span className="text-xs text-neutral-400">没有数据组（推送空配置会清除线上文件列表）</span>
+                        <span className="text-xs text-neutral-400">没有数据组（推送空配置会清除线上文件列表；新组默认不勾推送）</span>
                     )}
                 </div>
                 {entries.length > 0 && (

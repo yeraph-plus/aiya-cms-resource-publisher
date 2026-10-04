@@ -92,6 +92,12 @@ function flagBadges(row: RowDTO): string[] {
     if (row.lastError) {
         badges.push("错误");
     }
+    if (row.completion.status === "ready") {
+        badges.push("文件未推");
+    }
+    if (row.completion.status === "incomplete") {
+        badges.push("文件缺项");
+    }
     return badges;
 }
 
@@ -137,17 +143,27 @@ export default function Grid({ rows, terms, authors, selectedId, onSelect, onEdi
                             {flagBadges(data).map((badge) => (
                                 <span
                                     key={badge}
-                                    title={badge === "错误" ? (data.lastError ?? undefined) : undefined}
+                                    title={
+                                        badge === "错误"
+                                            ? (data.lastError ?? undefined)
+                                            : badge === "文件缺项"
+                                              ? data.completion.missing.join("；")
+                                              : undefined
+                                    }
                                     className={`px-1 rounded text-[11px] ${
                                         badge === "错误"
                                             ? "bg-red-600 text-white"
-                                            : badge === "冲突"
-                                              ? "bg-red-100 text-red-700"
-                                              : badge === "待推送"
+                                            : badge === "文件未推"
+                                              ? "bg-cyan-100 text-cyan-700"
+                                              : badge === "文件缺项"
                                                 ? "bg-amber-100 text-amber-700"
-                                                : badge === "线上缺失"
-                                                  ? "bg-neutral-300 text-neutral-700"
-                                                  : "bg-blue-100 text-blue-700"
+                                                : badge === "冲突"
+                                                  ? "bg-red-100 text-red-700"
+                                                  : badge === "待推送"
+                                                    ? "bg-amber-100 text-amber-700"
+                                                    : badge === "线上缺失"
+                                                      ? "bg-neutral-300 text-neutral-700"
+                                                      : "bg-blue-100 text-blue-700"
                                     }`}
                                 >
                                     {badge}

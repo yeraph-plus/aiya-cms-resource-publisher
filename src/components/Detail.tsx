@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RowDTO, StateDTO } from "../types";
 import { TAXONOMY_LABELS, TAXONOMY_ORDER } from "../types";
-import { pushCompletion, ensureStagingDir, fetchStagingDir, openStagingDir, saveRow, type RowPatch } from "../api";
+import { ensureStagingDir, fetchStagingDir, openStagingDir, saveRow, type RowPatch } from "../api";
 import { mergeTermTokens, splitTermInput } from "../../shared/terms";
 import FileServeEditor from "./FileServeEditor";
-import { fieldLabel, groupMissingField, normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
+import { normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
 
 interface Props {
     row: RowDTO;
@@ -151,18 +151,11 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
         return found ? found.name : `#${ref}`;
     };
 
-    // --- 文件补完 -----------------------------------------------------------
-    // The file list below IS the production aiya_core_fileserve config. The
-    // completion push sends it as a fileserve-only PUT once every group's
-    // required field carries a value and the row differs from the
-    // site-confirmed digest (row.completion, recomputed by the server).
+    // --- 本地目录（自动创建文件夹位置）---------------------------------------
+    // The staging folder is keyed by the site's post id; adding the first
+    // group triggers it, and the row shows its state.
+    // Group fields the editor renders; the per-group 推送 flag rides along.
     const listEntries = Object.entries(draft.fileserve ?? {}).sort(([a], [b]) => Number(a) - Number(b));
-    const listMissing = listEntries.flatMap(([id, group]) => {
-        const field = groupMissingField(group);
-        return field === null ? [] : [`组 #${id} 的「${fieldLabel(field)}」`];
-    });
-    const hasFileserve = listEntries.length > 0;
-    const completion = row.completion;
 
     // The staging folder (自动创建文件夹位置) is keyed by the site's post id;
     // adding the first group triggers it, and the row shows its state.
@@ -194,7 +187,7 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
                 if (result.dir !== null) {
                     setStaging({ dir: result.dir, name: result.name });
                     if (result.status === "created" || result.status === "claimed") {
-                        notify("ok", `上传目录已就绪：${result.name}`);
+                        notify("ok", `本地目录已就绪：${result.name}`);
                     }
                 }
             })
@@ -210,26 +203,6 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
                 if (result.dir !== null) {
                     setStaging({ dir: result.dir, name: result.name });
                 }
-            } catch (error) {
-                notify("err", String(error));
-            }
-        })();
-    };
-
-    const onPushCompletion = () => {
-        void (async () => {
-            try {
-                // The site call reads the persisted row — flush the debounce first.
-                await persist(draftRef.current);
-                const outcome = await pushCompletion([row.localId]);
-                if (outcome.error) {
-                    notify("err", `补完推送失败：${outcome.error}`);
-                } else if (outcome.failed > 0) {
-                    notify("err", `补完推送：${outcome.errors[0]?.message ?? "失败"}`);
-                } else {
-                    notify("ok", "补完推送：文件列表已写入站点");
-                }
-                onEdit();
             } catch (error) {
                 notify("err", String(error));
             }
@@ -367,57 +340,27 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
             </label>
 
             <div>
-                <span className="lbl">文件补完（网盘上传 · 分享链回填 · 补完推送）</span>
+                <span className="lbl">本地目录</span>
                 {row.postId === null ? (
-                    <p className="text-xs text-neutral-400">这一行还没推送到站点；先推送发布，再补完文件列表。</p>
+                    <p className="text-xs text-neutral-400">这一行还没推送到站点；先推送发布，再建本地目录。</p>
                 ) : (
-                    <div className="flex flex-col gap-2">
-                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                            <span className="text-neutral-500">上传目录</span>
-                            {staging?.name ? (
-                                <>
-                                    <span className="font-mono">{staging.name}</span>
-                                    <button className="btn" disabled={busy} onClick={onOpenDir}>
-                                        打开目录
-                                    </button>
-                                </>
-                            ) : (
-                                <>
-                                    <span className="text-neutral-400">尚未创建</span>
-                                    <button className="btn" disabled={busy} onClick={onOpenDir}>
-                                        创建目录
-                                    </button>
-                                </>
-                            )}
-                        </div>
-                        {!hasFileserve ? (
-                            <p className="text-xs text-neutral-400">在下方编辑器添加数据组；每组对应一个网盘分享。</p>
-                        ) : (
-                            <div className="flex flex-col gap-1.5">
-                                <div className="flex flex-wrap items-center gap-2 text-xs">
-                                    {listMissing.length > 0 ? (
-                                        <span className="px-1.5 rounded bg-amber-100 text-amber-700">缺字段</span>
-                                    ) : completion.status === "pushed" ? (
-                                        <span className="px-1.5 rounded bg-green-100 text-green-700">与站点一致</span>
-                                    ) : (
-                                        <span className="px-1.5 rounded bg-blue-100 text-blue-700">待推送</span>
-                                    )}
-                                    <span className="text-neutral-400">{listEntries.length} 组</span>
-                                </div>
-                                {listMissing.length > 0 && (
-                                    <div className="text-xs text-amber-600">
-                                        {listMissing.join("；")}——补完推送会整行拒绝，先填好再推。
-                                    </div>
-                                )}
-                                <button
-                                    className="btn btn-primary self-start"
-                                    disabled={busy || listMissing.length > 0}
-                                    onClick={onPushCompletion}
-                                >
-                                    补完推送此行
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                        {staging?.name ? (
+                            <>
+                                <span className="font-mono">{staging.name}</span>
+                                <button className="btn" disabled={busy} onClick={onOpenDir}>
+                                    打开目录
                                 </button>
-                            </div>
+                            </>
+                        ) : (
+                            <>
+                                <span className="text-neutral-400">尚未创建</span>
+                                <button className="btn" disabled={busy} onClick={onOpenDir}>
+                                    创建目录
+                                </button>
+                            </>
                         )}
+                        <span className="text-neutral-400">文件列表添加数据组时自动创建；网盘上传并把分享链回填到下方编辑器。</span>
                     </div>
                 )}
             </div>

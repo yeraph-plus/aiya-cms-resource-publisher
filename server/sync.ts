@@ -14,6 +14,7 @@ import {
     type PostRow,
 } from "./db.js";
 import { listResources, parseSlugFromLink, ping, taxonomies, users, WpError, type WpItem } from "./wp.js";
+import { mergeRemoteFileserve } from "../shared/fileserve.js";
 import { setProgress } from "./progress.js";
 
 export interface SyncOutcome {
@@ -130,7 +131,9 @@ function mergeRemote(item: WpItem, outcome: SyncOutcome): void {
         dateLocal: remote.dateLocal,
         dateGmt: remote.dateGmt,
         modifiedGmt: remote.modifiedGmt,
-        fileserve: remote.fileserve,
+        // The site is authoritative for pushed groups; local draft groups
+        // (push off) survive the pull.
+        fileserve: mergeRemoteFileserve(item.fileserve, existing.fileserve),
         slug: remote.slug,
         dirty: false,
         conflict: false,

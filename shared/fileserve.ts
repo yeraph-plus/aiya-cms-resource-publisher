@@ -99,10 +99,12 @@ export const ADAPTER_LABELS: Record<string, string> = {
     gofile_api: "GoFile",
 };
 
-export type FieldValue = string | number | null;
-export type FileGroup = Record<string, FieldValue> & { adapter: string };
+export type FieldValue = string | number | null | boolean;
+/** One group. `push` is a local-only extension the production domain never
+ * sees: false = local draft (excluded from pushes), anything else = included.
+ * It is stripped from the payload and the site drops it anyway. */
+export type FileGroup = Record<string, FieldValue> & { adapter: string; push?: boolean };
 export type FileServeConfig = Record<string, FileGroup>;
-
 /** A submitted key reduced to something storable; "" when nothing is left of it. */
 export function sanitizeId(raw: string): string {
     return raw.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 16);
@@ -177,7 +179,11 @@ export function normalizeConfig(raw: unknown): { config: FileServeConfig; errors
         }
 
         normalized.price = Math.max(0, Math.trunc(Number(normalized.price ?? 0)));
-        config[id] = { ...normalized, adapter } as FileGroup;
+        config[id] = {
+            ...normalized,
+            adapter,
+            ...(typeof group.push === "boolean" ? { push: group.push } : {}),
+        } as FileGroup;
     }
 
     if (errors.length > 0) {
@@ -186,13 +192,55 @@ export function normalizeConfig(raw: unknown): { config: FileServeConfig; errors
     return { config, errors: [] };
 }
 
-/** All fields at their defaults, ready for the editor; the price pre-fills per adapter. */
+/** All fields at their defaults, ready for the editor; the price pre-fills per
+ * adapter and a fresh group starts as a local draft (push: false). */
 export function emptyGroup(adapter: string): FileGroup {
-    const group: Record<string, FieldValue> = {};
+    const group: FileGroup = { adapter, push: false };
     for (const field of [...(ADAPTER_FIELDS[adapter] ?? []), ...COMMON_FIELDS]) {
         group[field.id] = field.default;
     }
-    return { ...group, adapter, price: priceDefault(adapter) } as FileGroup;
+    // The declared default (0) lands first; the adapter suggestion wins.
+    group.price = priceDefault(adapter);
+    return group;
+}
+
+/** The production payload for a row: flagged groups only (push !== false),
+ * flag field stripped. A flagged group missing its required field still goes
+ * out — `blocked` reports it for the badge, the push itself is the user's
+ * call. */
+export function pushableConfig(config: FileServeConfig): {
+    config: FileServeConfig;
+    blocked: { id: string; field: string }[];
+} {
+    const effective: FileServeConfig = {};
+    const blocked: { id: string; field: string }[] = [];
+    for (const [id, group] of Object.entries(config)) {
+        if (group.push === false) {
+            continue;
+        }
+        const field = groupMissingField(group);
+        if (field !== null) {
+            blocked.push({ id, field });
+        }
+        const { push, ...production } = group;
+        effective[id] = production as FileGroup;
+    }
+    return { config: effective, blocked };
+}
+
+/** The local file list after a site confirmation: the site's production
+ * config replaces everything it carries, while local draft groups
+ * (push === false) ride along untouched — they were excluded from the push
+ * on purpose and must not be lost to the whole-row write-back or a sync. */
+export function mergeRemoteFileserve(remote: unknown, localRaw: string | null): string | null {
+    const remoteConfig =
+        remote !== null && typeof remote === "object" && !Array.isArray(remote) ? (remote as FileServeConfig) : null;
+    const local = localRaw ? normalizeConfig(localRaw).config : {};
+    const drafts = Object.entries(local).filter(([id, group]) => group.push === false && remoteConfig?.[id] === undefined);
+    if (remoteConfig === null && drafts.length === 0) {
+        return null;
+    }
+    return JSON.stringify({ ...(remoteConfig ?? {}), ...Object.fromEntries(drafts) });
 }
 
 /** The next free short id: one past the highest numeric key, like the domain. */

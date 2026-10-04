@@ -8,16 +8,17 @@ import { WpError, type WpItem } from "../server/wp.js";
 
 // The db module opens its file at import time — point it at a temp dir
 // before the app (and everything it pulls in) is imported.
-process.env.PUBLISHER_DATA = mkdtempSync(join(tmpdir(), "publisher-completion-"));
+process.env.PUBLISHER_DATA = mkdtempSync(join(tmpdir(), "publisher-pushflag-"));
 
-// The site calls are scripted; the rest of the client stays real. The
-// whole-row push is driven through createResource/updateResource for the
-// mutual-exclusion and baseline tests.
+// The site calls are scripted; the rest of the client stays real.
 vi.mock("../server/wp.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../server/wp.js")>();
     return {
         ...actual,
-        updateResourceFileserve: vi.fn(),
+        ping: vi.fn(),
+        users: vi.fn(),
+        taxonomies: vi.fn(),
+        listResources: vi.fn(),
         createResource: vi.fn(),
         updateResource: vi.fn(),
     };
@@ -45,10 +46,13 @@ const item = (id: number, patch: Partial<WpItem> = {}): WpItem => ({
     ...patch,
 });
 
-/** A one-group platform config — what a completion push sends and what the
- * site echoes back once its normalizer has had it. */
-const platformConfig = (url: string): WpItem["fileserve"] => ({
-    "1": { adapter: "platform", url, code: "a1b2", title: "百度网盘", price: 0 },
+const platformGroup = (url: string, push = true) => ({
+    adapter: "platform",
+    url,
+    code: "a1b2",
+    title: "百度网盘",
+    price: 0,
+    ...(push ? {} : { push: false }),
 });
 
 beforeAll(async () => {
@@ -57,7 +61,7 @@ beforeAll(async () => {
     await app.ready();
     wp = await import("../server/wp.js");
     db = await import("../server/db.js");
-    db.setSetting("siteUrl", "http://completion.test");
+    db.setSetting("siteUrl", "http://pushflag.test");
     db.setSetting("username", "u");
     db.setSetting("appPassword", "p");
 });
@@ -67,134 +71,162 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
-    vi.mocked(wp.updateResourceFileserve).mockReset();
     vi.mocked(wp.createResource).mockReset();
     vi.mocked(wp.updateResource).mockReset();
     db.db.exec("DELETE FROM posts");
 });
 
-describe("completion push", () => {
-    it("writes the row's file list only and scopes the write-back on a dirty row", async () => {
-        const localId = db.insertPost({
-            status: "publish",
-            title: "原标题",
-            content: "正文",
-            postId: 501,
-            fileserve: JSON.stringify(platformConfig("https://pan.baidu.com/s/1abc")),
-            dateLocal: "2026-01-01T08:00:00",
-            dateGmt: "2026-01-01T00:00:00",
-            modifiedGmt: "2026-01-01T00:00:00",
-            dirty: true,
-            snapshot: JSON.stringify({
-                status: "publish",
-                title: "原标题",
-                content: "正文",
-                authorId: null,
-                dateLocal: "2026-01-01T08:00:00",
-                dateGmt: "2026-01-01T00:00:00",
-                modifiedGmt: "2026-01-01T00:00:00",
-                terms: {},
-                fileserve: null,
-            }),
+describe("per-group push flags in the whole-row push", () => {
+    it("sends only flagged groups, with the flag field stripped", async () => {
+        const localId = db.insertPost({ status: "draft", title: "行", dirty: true });
+        await app.inject({
+            method: "PUT",
+            url: `/api/posts/${localId}`,
+            payload: {
+                fileserve: {
+                    "1": platformGroup("https://pan.baidu.com/s/1"),
+                    "2": platformGroup("https://pan.baidu.com/s/2", false),
+                },
+            },
         });
-        db.updatePostRow(localId, { title: "本地改过的标题" });
 
-        const pushedFileserve = platformConfig("https://pan.baidu.com/s/1abc");
-        vi.mocked(wp.updateResourceFileserve).mockResolvedValue(
-            item(501, {
-                fileserve: pushedFileserve,
-                date: "2026-10-04T12:00:00",
-                dateGmt: "2026-10-04T04:00:00",
-                modifiedGmt: "2026-10-04T04:00:00",
+        vi.mocked(wp.createResource).mockResolvedValue(item(701, { fileserve: { "1": platformGroup("https://pan.baidu.com/s/1") } }));
+        const res = await app.inject({ method: "POST", url: "/api/push", payload: { localIds: [localId] } });
+        expect(res.json().pushed).toBe(1);
+
+        const payload = vi.mocked(wp.createResource).mock.calls[0]![1];
+        expect(payload.fileserve).toEqual({
+            "1": { adapter: "platform", url: "https://pan.baidu.com/s/1", code: "a1b2", title: "百度网盘", price: 0 },
+        });
+        expect(JSON.stringify(payload.fileserve)).not.toContain("push");
+    });
+
+    it("a flagged incomplete group goes out as-is; the badge is the only warning", async () => {
+        const localId = db.insertPost({ status: "draft", title: "行", dirty: true });
+        await app.inject({
+            method: "PUT",
+            url: `/api/posts/${localId}`,
+            payload: { fileserve: { "1": platformGroup("") } },
+        });
+
+        // The badge flags the gap…
+        const state = await app.inject({ method: "GET", url: "/api/state" });
+        const completion = state.json().posts.find((p: { localId: number }) => p.localId === localId).completion;
+        expect(completion.status).toBe("incomplete");
+        expect(completion.missing).toEqual(["组 #1 · 链接"]);
+
+        // …but the push itself is the user's call and carries the group.
+        vi.mocked(wp.createResource).mockResolvedValue(item(705));
+        const res = await app.inject({ method: "POST", url: "/api/push", payload: { localIds: [localId] } });
+        expect(res.json().pushed).toBe(1);
+        const payload = vi.mocked(wp.createResource).mock.calls[0]![1];
+        expect(payload.fileserve).toEqual({
+            "1": { adapter: "platform", url: "", code: "a1b2", title: "百度网盘", price: 0 },
+        });
+    });
+
+    it("unflagged drafts survive the push response write-back and a sync", async () => {
+        const localId = db.insertPost({ status: "publish", title: "行", postId: 702, dirty: true });
+        await app.inject({
+            method: "PUT",
+            url: `/api/posts/${localId}`,
+            payload: {
+                fileserve: {
+                    "1": platformGroup("https://pan.baidu.com/s/1"),
+                    "2": platformGroup("https://pan.baidu.com/s/2-draft", false),
+                },
+            },
+        });
+
+        // The site confirms only the flagged group.
+        vi.mocked(wp.updateResource).mockResolvedValue(
+            item(702, {
+                link: "https://x.test/resource/702-slug/",
+                fileserve: { "1": platformGroup("https://pan.baidu.com/s/1") },
             }),
         );
+        const res = await app.inject({ method: "POST", url: "/api/push", payload: { localIds: [localId] } });
+        expect(res.json().pushed).toBe(1);
 
-        const res = await app.inject({ method: "POST", url: "/api/completion/push", payload: {} });
-        const body = res.json();
-        expect(body.ok).toBe(true);
-        expect(body.pushed).toBe(1);
-
-        // The site call carried exactly the row's file list — nothing else.
-        expect(wp.updateResourceFileserve).toHaveBeenCalledTimes(1);
-        const [, calledPostId, calledConfig] = vi.mocked(wp.updateResourceFileserve).mock.calls[0]!;
-        expect(calledPostId).toBe(501);
-        expect(calledConfig).toEqual(pushedFileserve);
-
-        // Scoped write-back: fileserve + stamps move, the in-flight edits and
-        // the dirty flag do not.
         const after = db.getPost(localId)!;
-        expect(after.title).toBe("本地改过的标题");
-        expect(after.dirty).toBe(true);
-        expect(after.dateLocal).toBe("2026-01-01T08:00:00");
-        expect(after.modifiedGmt).toBe("2026-10-04T04:00:00");
-        expect(JSON.parse(after.fileserve!)).toEqual(pushedFileserve);
-        // The digest baseline rides on the server-confirmed shape.
-        expect(after.fileservePushedDigest).toBe(configDigest(pushedFileserve));
-        const snapshot = JSON.parse(after.snapshot!);
-        expect(snapshot.fileserve).toEqual(pushedFileserve);
-        expect(snapshot.modifiedGmt).toBe("2026-10-04T04:00:00");
+        const stored = JSON.parse(after.fileserve!);
+        expect(Object.keys(stored).sort()).toEqual(["1", "2"]);
+        expect(stored["2"].push).toBe(false);
+        // The baseline covers the site-confirmed subset; the badge reads "pushed".
+        expect(after.fileservePushedDigest).toBe(configDigest({ "1": platformGroup("https://pan.baidu.com/s/1") }));
+        const state = await app.inject({ method: "GET", url: "/api/state" });
+        expect(state.json().posts.find((p: { localId: number }) => p.localId === localId).completion.status).toBe("pushed");
 
-        // A second run finds nothing new.
-        const again = await app.inject({ method: "POST", url: "/api/completion/push", payload: {} });
-        expect(again.json().pushed).toBe(0);
-        expect(wp.updateResourceFileserve).toHaveBeenCalledTimes(1);
+        // A later pull of the same item keeps the draft riding along.
+        vi.mocked(wp.listResources).mockResolvedValue({
+            items: [item(702, { fileserve: { "1": platformGroup("https://pan.baidu.com/s/1") } })],
+            total: 1,
+        });
+        vi.mocked(wp.ping).mockResolvedValue({
+            user: { id: 1, login: "u", name: "U" },
+            caps: { editPosts: true, publishPosts: true, editOthersPosts: true },
+            resourceAvailable: true,
+            version: "0.1.1-test",
+        });
+        vi.mocked(wp.users).mockResolvedValue([]);
+        vi.mocked(wp.taxonomies).mockResolvedValue([]);
+        const sync = await app.inject({ method: "POST", url: "/api/sync", payload: {} });
+        expect(sync.json().ok).toBe(true);
+        const afterSync = JSON.parse(db.getPost(localId)!.fileserve!);
+        expect(Object.keys(afterSync).sort()).toEqual(["1", "2"]);
+        expect(afterSync["2"].push).toBe(false);
     });
 
-    it("refuses rows whose groups miss their required field, naming the group", async () => {
-        const localId = db.insertPost({
-            status: "publish",
-            title: "行",
-            postId: 502,
-            fileserve: JSON.stringify({ "1": { adapter: "platform", url: "", code: "", title: "百度网盘", price: 0 } }),
+    it("an all-draft list pushes the empty production config (clears the online list)", async () => {
+        const localId = db.insertPost({ status: "publish", title: "行", postId: 703 });
+        await app.inject({
+            method: "PUT",
+            url: `/api/posts/${localId}`,
+            payload: { fileserve: { "1": platformGroup("https://pan.baidu.com/s/draft", false) } },
         });
 
-        const res = await app.inject({ method: "POST", url: "/api/completion/push", payload: { localIds: [localId] } });
-        const body = res.json();
-        expect(body.pushed).toBe(0);
-        expect(body.failed).toBe(1);
-        expect(body.errors[0].message).toContain("组 #1");
-        expect(body.errors[0].message).toContain("链接");
-        expect(wp.updateResourceFileserve).not.toHaveBeenCalled();
-        expect(db.getPost(localId)?.lastError).toContain("组 #1");
+        const state = await app.inject({ method: "GET", url: "/api/state" });
+        expect(state.json().posts.find((p: { localId: number }) => p.localId === localId).completion.status).toBe("none");
+
+        vi.mocked(wp.updateResource).mockResolvedValue(item(703));
+        const res = await app.inject({ method: "POST", url: "/api/push", payload: { localIds: [localId] } });
+        expect(res.json().pushed).toBe(1);
+        // The site call carries the empty production config (clearing the
+        // online list) — unflagged drafts never leak.
+        const payload = vi.mocked(wp.updateResource).mock.calls[0]![2];
+        expect(payload.fileserve).toEqual({});
     });
 
-    it("ignores rows without a post, without a list, and lists the site already confirmed", async () => {
-        db.insertPost({ status: "publish", title: "未上线", fileserve: JSON.stringify(platformConfig("https://x")) });
-        db.insertPost({ status: "publish", title: "空列表", postId: 503, fileserve: "{}" });
-        const confirmed = db.insertPost({
-            status: "publish",
-            title: "已推送",
-            postId: 504,
-            fileserve: JSON.stringify(platformConfig("https://y")),
+    it("marks the row dirty-ready after the digest drifts, then pushed again", async () => {
+        const localId = db.insertPost({ status: "publish", title: "行", postId: 704 });
+        await app.inject({
+            method: "PUT",
+            url: `/api/posts/${localId}`,
+            payload: { fileserve: { "1": platformGroup("https://pan.baidu.com/s/v1") } },
         });
-        db.updatePostRow(confirmed, { fileservePushedDigest: configDigest(platformConfig("https://y")) });
+        vi.mocked(wp.updateResource).mockResolvedValue(
+            item(704, { fileserve: { "1": platformGroup("https://pan.baidu.com/s/v1") } }),
+        );
+        await app.inject({ method: "POST", url: "/api/push", payload: { localIds: [localId] } });
 
-        const res = await app.inject({ method: "POST", url: "/api/completion/push", payload: {} });
-        expect(res.json()).toMatchObject({ ok: true, pushed: 0, failed: 0 });
-        expect(wp.updateResourceFileserve).not.toHaveBeenCalled();
+        // Change the link: the digest no longer matches.
+        await app.inject({
+            method: "PUT",
+            url: `/api/posts/${localId}`,
+            payload: { fileserve: { "1": platformGroup("https://pan.baidu.com/s/v2") } },
+        });
+        const dirty = await app.inject({ method: "GET", url: "/api/state" });
+        expect(dirty.json().posts.find((p: { localId: number }) => p.localId === localId).completion.status).toBe("ready");
+
+        vi.mocked(wp.updateResource).mockResolvedValue(
+            item(704, { fileserve: { "1": platformGroup("https://pan.baidu.com/s/v2") } }),
+        );
+        await app.inject({ method: "POST", url: "/api/push", payload: { localIds: [localId] } });
+        const done = await app.inject({ method: "GET", url: "/api/state" });
+        expect(done.json().posts.find((p: { localId: number }) => p.localId === localId).completion.status).toBe("pushed");
     });
 
-    it("aborts after three consecutive transport failures", async () => {
-        for (let i = 0; i < 4; i += 1) {
-            db.insertPost({
-                status: "publish",
-                title: `行${i}`,
-                postId: 600 + i,
-                fileserve: JSON.stringify(platformConfig("https://pan.baidu.com/s/x")),
-            });
-        }
-        vi.mocked(wp.updateResourceFileserve).mockRejectedValue(new WpError(0, "aiya_publish_unreachable", "无法连接站点"));
-
-        const res = await app.inject({ method: "POST", url: "/api/completion/push", payload: {} });
-        const body = res.json();
-        expect(body.pushed).toBe(0);
-        expect(body.failed).toBe(3);
-        expect(body.error).toContain("已中止本轮补完推送");
-        expect(body.error).toContain("剩余 1 行");
-        expect(wp.updateResourceFileserve).toHaveBeenCalledTimes(3);
-    });
-
-    it("answers 409 while a whole-row push holds the slot", async () => {
+    it("answers 409 while a push holds the slot and completion/push endpoints stay retired", async () => {
         db.insertPost({ status: "draft", title: "普通行", dirty: true });
         let release!: (value: WpItem) => void;
         const gate = new Promise<WpItem>((resolve) => {
@@ -205,32 +237,31 @@ describe("completion push", () => {
         const first = app.inject({ method: "POST", url: "/api/push", payload: {} });
         await new Promise((resolve) => setTimeout(resolve, 25));
 
-        const completion = await app.inject({ method: "POST", url: "/api/completion/push", payload: {} });
-        expect(completion.statusCode).toBe(409);
-        expect(completion.json().error).toContain("已有推送在进行中");
+        const second = await app.inject({ method: "POST", url: "/api/push", payload: {} });
+        expect(second.statusCode).toBe(409);
+
+        const retired = await app.inject({ method: "POST", url: "/api/completion/push", payload: {} });
+        expect(retired.statusCode).toBe(404);
 
         release(item(201));
         expect((await first).json().pushed).toBe(1);
     });
 
-    it("a whole-row push re-confirms the baseline, so completion finds nothing new", async () => {
-        const localId = db.insertPost({
-            status: "publish",
-            title: "行",
-            postId: 505,
-            fileserve: JSON.stringify(platformConfig("https://pan.baidu.com/s/z")),
-            dirty: true,
-        });
-        vi.mocked(wp.updateResource).mockResolvedValue(item(505, { fileserve: platformConfig("https://pan.baidu.com/s/z") }));
+    it("a transport failure streak still aborts the run", async () => {
+        for (let i = 0; i < 4; i += 1) {
+            const localId = db.insertPost({ status: "draft", title: `行${i}`, dirty: true });
+            await app.inject({
+                method: "PUT",
+                url: `/api/posts/${localId}`,
+                payload: { fileserve: { "1": platformGroup("https://pan.baidu.com/s/x") } },
+            });
+        }
+        vi.mocked(wp.createResource).mockRejectedValue(new WpError(0, "aiya_publish_unreachable", "无法连接站点"));
 
         const res = await app.inject({ method: "POST", url: "/api/push", payload: {} });
-        expect(res.json().pushed).toBe(1);
-
-        const after = db.getPost(localId)!;
-        expect(after.fileservePushedDigest).toBe(configDigest(platformConfig("https://pan.baidu.com/s/z")));
-
-        const again = await app.inject({ method: "POST", url: "/api/completion/push", payload: {} });
-        expect(again.json().pushed).toBe(0);
-        expect(wp.updateResourceFileserve).not.toHaveBeenCalled();
+        const body = res.json();
+        expect(body.pushed).toBe(0);
+        expect(body.failed).toBe(3);
+        expect(body.error).toContain("已中止本轮推送");
     });
 });

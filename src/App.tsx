@@ -151,21 +151,6 @@ export default function App() {
             await refresh();
         });
 
-    const onCompletionPush = (localIds?: number[]) =>
-        withBusy(async () => {
-            const outcome = await api.pushCompletion(localIds);
-            if (outcome.error) {
-                notify("err", `补完推送失败：${outcome.error}`);
-            } else if (outcome.failed > 0) {
-                notify("err", `补完推送：成功 ${outcome.pushed}，失败 ${outcome.failed}（${outcome.errors[0]?.message ?? ""}）`);
-            } else if (outcome.pushed === 0) {
-                notify("ok", "补完推送：没有可推送的行（文件列表都还没填链接，或都已推送过）。");
-            } else {
-                notify("ok", `补完推送完成：${outcome.pushed} 行的文件列表已写入站点`);
-            }
-            await refresh();
-        });
-
     const onNew = () =>
         withBusy(async () => {
             const localId = await api.createRow();
@@ -257,9 +242,6 @@ export default function App() {
                     </button>
                     <button className="btn btn-primary" disabled={busy || dirtyCount === 0} onClick={() => onPush()}>
                         推送（{dirtyCount}）
-                    </button>
-                    <button className="btn" disabled={busy} onClick={() => onCompletionPush()}>
-                        补完推送
                     </button>
                 </span>
                 <span className="pl-2 border-l border-neutral-200 flex items-center gap-2">

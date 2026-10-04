@@ -17,7 +17,7 @@ import {
     type WpItem,
 } from "./wp.js";
 import { buildPayload } from "./payload.js";
-import { normalizeConfig } from "../shared/fileserve.js";
+import { mergeRemoteFileserve, normalizeConfig, pushableConfig } from "../shared/fileserve.js";
 import { configDigest } from "./digest.js";
 import { setProgress } from "./progress.js";
 
@@ -51,7 +51,6 @@ function now(): string {
 
 function applyResponse(row: PostRow, item: WpItem): void {
     upsertAuthor(item.authorId, item.authorName);
-    const remoteFileserve = item.fileserve ? JSON.stringify(item.fileserve) : null;
     const termRefs: Record<string, string[]> = {};
     for (const [taxonomy, terms] of Object.entries(item.terms ?? {})) {
         termRefs[taxonomy] = terms.map((term) => String(term.id));
@@ -78,7 +77,9 @@ function applyResponse(row: PostRow, item: WpItem): void {
         dateLocal: state.dateLocal,
         dateGmt: state.dateGmt,
         modifiedGmt: state.modifiedGmt,
-        fileserve: remoteFileserve,
+        // The site confirms the flagged subset; local draft groups (push off)
+        // ride along so they are not lost to the whole-row write-back.
+        fileserve: mergeRemoteFileserve(item.fileserve, row.fileserve),
         slug: parseSlugFromLink(item.link),
         // A successful whole-row write re-confirms the file list, so the
         // completion baseline moves with it.
@@ -131,9 +132,17 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
             continue;
         }
 
-        const fileserve = Object.keys(config).length > 0 ? JSON.stringify(config) : row.fileserve;
+        // The per-group 推送 switches decide what goes out: flagged groups
+        // form the payload with the flag stripped, drafts never leave the
+        // tool. A flagged group with an empty required field goes out as-is —
+        // the 文件缺项 badge is the warning, the push is the user's call.
+        let fileserveValue: string | null = row.fileserve;
+        if (row.fileserve !== null) {
+            const { config: effective } = pushableConfig(config);
+            fileserveValue = JSON.stringify(effective);
+        }
         try {
-            const payload = buildPayload({ ...row, fileserve }, getTermRefs(row.localId));
+            const payload = buildPayload({ ...row, fileserve: fileserveValue }, getTermRefs(row.localId));
             const item = row.postId
                 ? await updateResource(
                       { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword, proxyUrl: settings.proxyUrl },

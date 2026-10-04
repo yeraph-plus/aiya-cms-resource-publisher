@@ -225,15 +225,6 @@ export async function updateResource(creds: WpCreds, postId: number, payload: Pu
     return request<WpItem>(creds, "PUT", `/resource/${postId}`, payload);
 }
 
-/**
- * The completion push updates ONLY the file list: a partial PUT — the site
- * writes the fields it receives and leaves everything else untouched, so the
- * post body, terms and author the tool last saw never ride along.
- */
-export async function updateResourceFileserve(creds: WpCreds, postId: number, fileserve: unknown): Promise<WpItem> {
-    return request<WpItem>(creds, "PUT", `/resource/${postId}`, { fileserve });
-}
-
 export async function getResource(creds: WpCreds, postId: number): Promise<WpItem> {
     return request<WpItem>(creds, "GET", `/resource/${postId}`);
 }

@@ -26,7 +26,7 @@ import {
 } from "./db.js";
 import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
-import { completionState, runCompletionPush } from "./completion.js";
+import { completionState } from "./completion.js";
 import { ensureStagingDir, openStagingDir } from "./dirs.js";
 import { isOurStateEndpoint, killTree, listenerPid } from "./portguard.js";
 import { getProgress, setProgress } from "./progress.js";
@@ -346,16 +346,14 @@ function errorMessage(error: unknown): string {
         return { imported: localIds.length, failed: built.errors.length, errors: built.errors, localIds };
     });
 
-    // Pull, push and the completion push all own the site link and the
-    // progress slot; they must not interleave — two tabs defeat the
-    // client-side busy flag, and a push racing a sync's row merge would
-    // write snapshots against moving rows. One in-flight slot serializes
-    // them; the loser gets a 409.
-    type SiteOperation = "sync" | "push" | "completion";
+    // Pull and push own the site link and the progress slot; they must not
+    // interleave — two tabs defeat the client-side busy flag, and a push
+    // racing a sync's row merge would write snapshots against moving rows.
+    // One in-flight slot serializes them; the loser gets a 409.
+    type SiteOperation = "sync" | "push";
     const OPERATION_LABEL: Record<SiteOperation, string> = {
         sync: "拉取",
         push: "推送",
-        completion: "补完推送",
     };
     let siteOperation: SiteOperation | null = null;
     const slotBusy = (reply: { code: (code: number) => { send: (body: unknown) => unknown } }) => {
@@ -384,25 +382,6 @@ function errorMessage(error: unknown): string {
         siteOperation = "push";
         try {
             return await runPush(Array.isArray(body.localIds) ? body.localIds : undefined);
-        } finally {
-            setProgress(null);
-            siteOperation = null;
-        }
-    });
-
-    // --- FileServe completion push (文件补完) --------------------------------
-
-    app.post("/api/completion/push", async (request, reply) => {
-        const body = (request.body ?? {}) as { localIds?: unknown };
-        if (siteOperation !== null) {
-            return slotBusy(reply);
-        }
-        siteOperation = "completion";
-        try {
-            const localIds = Array.isArray(body.localIds)
-                ? body.localIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)
-                : undefined;
-            return await runCompletionPush(localIds);
         } finally {
             setProgress(null);
             siteOperation = null;

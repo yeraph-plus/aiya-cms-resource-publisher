@@ -161,19 +161,6 @@ export function clearLogs(): Promise<{ ok: boolean; cleared: number }> {
     return call<{ ok: boolean; cleared: number }>("/api/logs/clear", "POST", {});
 }
 
-export interface CompletionOutcomeDTO {
-    ok: boolean;
-    error: string | null;
-    pushed: number;
-    failed: number;
-    errors: { localId: number; postId: number | null; title: string; message: string }[];
-}
-
-/** Pushes the file lists of the given rows (or every row with new ones). */
-export function pushCompletion(localIds?: number[]): Promise<CompletionOutcomeDTO> {
-    return call<CompletionOutcomeDTO>("/api/completion/push", "POST", { localIds });
-}
-
 export interface StagingDirDTO {
     status: "existing" | "claimed" | "created" | "blocked";
     dir: string | null;

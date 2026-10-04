@@ -22,7 +22,8 @@ export interface TermInfo {
     slug: string;
 }
 
-/** Server-recomputed completion state of a row's file list. */
+/** Server-recomputed push state of a row's flagged file groups — the grid
+ * badge's ground truth. */
 export interface CompletionStateDTO {
     status: "none" | "incomplete" | "ready" | "pushed";
     missing: string[];
