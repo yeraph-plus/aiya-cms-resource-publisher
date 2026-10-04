@@ -393,11 +393,13 @@ function errorMessage(error: unknown): string {
 
     app.get("/api/progress", async () => getProgress());
 
-    // --- Upload staging directories (自动创建文件夹) -------------------------
-    // A blocked ensure is an expected condition (unpublished row, unconfigured
-    // root), so ensure answers 200 with status "blocked" — the fire-and-forget
-    // trigger must not surface as a failed request; open answers 400 so a
-    // clicked button shows the reason.
+    // --- Local staging directories (本地目录，纯本地辅助) ---------------------
+    // A convenience for staging files locally before the client upload; the
+    // netdisk lane neither reads nor requires it — the script names and
+    // creates the netdisk folder itself from the queue item. A blocked ensure
+    // is an expected condition (unpublished row, unconfigured root), so
+    // ensure answers 200 with status "blocked"; open answers 400 so a clicked
+    // button shows the reason.
 
     app.post("/api/fileserve-dir/ensure", async (request, reply) => {
         const body = (request.body ?? {}) as { localId?: unknown };

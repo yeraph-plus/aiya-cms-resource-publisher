@@ -8,8 +8,8 @@
  */
 
 import { normalizeConfig, priceDefault } from "../shared/fileserve.js";
+import { stagingDirName } from "../shared/staging-name.js";
 import { getPost, listPosts, logEvent, updatePostRow, type PostRow } from "./db.js";
-import { stagingDirName } from "./dirs.js";
 
 export interface QueueItem {
     localId: number;

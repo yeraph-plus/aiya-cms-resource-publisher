@@ -13,7 +13,8 @@ import {
 interface Props {
     config: FileServeConfig | null;
     onChange: (config: FileServeConfig | null) => void;
-    /** Fires whenever a brand-new group id is added — the staging-dir trigger. */
+    /** Fires whenever a brand-new group id is added — the local staging-dir
+     * trigger (纯本地辅助，网盘 lane 不读它). */
     onGroupAdded?: () => void;
 }
 

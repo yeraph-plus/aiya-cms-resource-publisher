@@ -94,7 +94,8 @@ export interface SettingsShape {
     proxyUrl: string;
     defaultAuthorId: number | null;
     lastSyncCursor: string | null;
-    /** Root where upload staging directories are auto-created; "" = unset. */
+    /** Root where local staging directories are created (纯本地辅助；网盘
+     * lane 不读它); "" = unset. */
     workRoot: string;
 }
 

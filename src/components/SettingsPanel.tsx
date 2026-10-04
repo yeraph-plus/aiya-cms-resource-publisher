@@ -124,11 +124,11 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
                         ))}
                     </select>
 
-                    <label className="text-right text-neutral-500">自动创建文件夹位置</label>
+                    <label className="text-right text-neutral-500">本地暂存目录位置</label>
                     <input
                         value={workRoot}
                         onChange={(event) => setWorkRoot(event.target.value)}
-                        placeholder="文件列表添加数据组时自动建上传目录的根位置，如 D:\\网盘发布（可空 = 不自动创建）"
+                        placeholder="可选的本地暂存根位置，如 D:\\网盘发布（可空 = 不自动创建；网盘回填不依赖它）"
                     />
                 </div>
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AIYA 网盘分享回填（百度）
 // @namespace    aiya-netdisk
-// @version      0.3.1
+// @version      0.4.0
 // @description  在百度网盘 web 端定位发帖器同名目录、创建分享并把链接回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
 // @match        https://pan.baidu.com/*
 // @grant        GM_xmlhttpRequest
@@ -107,8 +107,10 @@
         return bdstoken;
     }
 
-    /** The staged folder's entry under the configured root: depth-1 listing
-     * first (deterministic). */
+    /** The staged folder under the configured root: listed first (covers the
+     * uploaded-already case), created when missing — the share is a live view
+     * of the folder, so files the client uploads afterwards simply appear in
+     * it. */
     async function findFolder(dirName) {
         for (let page = 1; ; page += 1) {
             const result = await apiJson("/api/list", {
@@ -132,12 +134,42 @@
                     (entry.server_filename === dirName || entry.server_filename?.startsWith(`${dirName}-`)),
             );
             if (hit) {
-                return hit;
+                return { entry: hit, created: false };
             }
             if (entries.length < 1000) {
-                throw new Error(`根目录 ${cfg.rootDir} 下没找到 ${dirName}（确认客户端已上传完成）`);
+                break;
             }
         }
+        // Not found: create it (the new stack's /api/create; /api/createDir is
+        // dead and answers errno 10).
+        const token = await getBdstoken();
+        const created = await apiJson("/api/create", {
+            params: { a: "commit", bdstoken: token, clienttype: 0, app_id: 250528, web: 1 },
+            method: "POST",
+            form: {
+                path: `${cfg.rootDir === "/" ? "" : cfg.rootDir}/${dirName}`,
+                isdir: 1,
+                block_list: "[]",
+            },
+        });
+        if (created?.errno !== 0 && created?.errno !== 12) {
+            const hints = { [-6]: "登录态失效", [-8]: "目录已存在", [-10]: "空间不足或参数错误" };
+            throw new Error(`创建网盘目录失败（errno=${created?.errno}${hints[created?.errno] ? `：${hints[created?.errno]}` : ""}）`);
+        }
+        // Re-list to pick up the new folder's fs_id.
+        const listing = await apiJson("/api/list", {
+            params: { dir: cfg.rootDir, order: "name", desc: 0, num: 1000, page: 1, clienttype: 0, app_id: 250528, web: 1 },
+        });
+        if (listing?.errno !== 0) {
+            throw new Error(`目录已创建但回列失败（errno=${listing?.errno}）——重试一次即可`);
+        }
+        const entry = (listing.list ?? listing.data ?? []).find(
+            (e) => (Number(e.isdir) === 1 || e.isdir === "1") && e.server_filename === dirName,
+        );
+        if (!entry) {
+            throw new Error(`目录已创建但回列没有看到 ${dirName}——重试一次即可`);
+        }
+        return { entry, created: true };
     }
 
     async function createShare(entry, code) {
@@ -174,9 +206,9 @@
 
     // ---------- 单行处理 -----------------------------------------------------
     async function processItem(item) {
-        setStatus(item, "run", "定位目录…");
-        const entry = await findFolder(item.dirName);
-        setStatus(item, "run", `创建分享（${entry.server_filename}）…`);
+        setStatus(item, "run", "定位/创建目录…");
+        const { entry, created } = await findFolder(item.dirName);
+        setStatus(item, "run", `${created ? "已创建" : "已定位"} ${entry.server_filename}，创建分享…`);
         const code = randomCode();
         const link = await createShare(entry, code);
         setStatus(item, "run", "回填发帖器…");
@@ -186,7 +218,12 @@
             body: JSON.stringify({ localId: item.localId, groupId: item.groupId, url: link, code }),
         });
         const periodText = cfg.period === "0" ? "永久" : `${cfg.period} 天`;
-        setStatus(item, "done", `已回填：${link}（提取码 ${code} · ${periodText}，已勾选推送）`);
+        setStatus(
+            item,
+            "done",
+            `已回填：${link}（提取码 ${code} · ${periodText}，已勾选推送）` +
+                (created ? "；客户端把文件传进该目录即可，分享实时可见" : ""),
+        );
     }
 
     // ---------- 队列循环 -----------------------------------------------------

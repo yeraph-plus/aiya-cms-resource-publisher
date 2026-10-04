@@ -151,13 +151,10 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
         return found ? found.name : `#${ref}`;
     };
 
-    // --- 本地目录（自动创建文件夹位置）---------------------------------------
-    // The staging folder is keyed by the site's post id; adding the first
-    // group triggers it, and the row shows its state.
-    // Group fields the editor renders; the per-group 推送 flag rides along.
-
-    // The staging folder (自动创建文件夹位置) is keyed by the site's post id;
-    // adding the first group triggers it, and the row shows its state.
+    // --- 本地目录（纯本地辅助）-----------------------------------------------
+    // Staging folder for files pending the client upload; purely local — the
+    // netdisk lane names and creates its folder netdisk-side and never reads
+    // this. Keyed by the site's post id; adding the first group triggers it.
     const [staging, setStaging] = useState<{ dir: string | null; name: string | null } | null>(null);
     useEffect(() => {
         if (row.postId === null) {
@@ -339,7 +336,7 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
             </label>
 
             <div>
-                <span className="lbl">本地目录</span>
+                <span className="lbl">本地目录（可选的本地暂存）</span>
                 {row.postId === null ? (
                     <p className="text-xs text-neutral-400">这一行还没推送到站点；先推送发布，再建本地目录。</p>
                 ) : (
@@ -359,7 +356,7 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
                                 </button>
                             </>
                         )}
-                        <span className="text-neutral-400">文件列表添加数据组时自动创建；网盘上传并把分享链回填到下方编辑器。</span>
+                        <span className="text-neutral-400">纯本地暂存辅助，网盘回填不依赖它；目录会在下方添加数据组时自动创建。</span>
                     </div>
                 )}
             </div>
