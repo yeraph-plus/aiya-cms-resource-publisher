@@ -55,6 +55,14 @@ CREATE TABLE IF NOT EXISTS post_terms (
     ref TEXT NOT NULL,
     PRIMARY KEY (local_id, taxonomy, ref)
 );
+CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    level TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    ref INTEGER,
+    message TEXT NOT NULL
+);
 `);
 
 // Databases created before the completion flow lack the slug column; the
@@ -432,4 +440,46 @@ export function parseSnapshot(raw: string | null): Snapshot | null {
     } catch {
         return null;
     }
+}
+
+// --- 运行日志 -------------------------------------------------------------
+// One rolling table for everything the tool does operationally (sync, push,
+// completion, staging dirs, boot). The UI polls it incrementally by id, so
+// AUTOINCREMENT is load-bearing: ids never rewind, even after a full clear.
+
+export type LogLevel = "info" | "warn" | "error";
+
+const LOG_LIMIT = 2000;
+
+export function logEvent(level: LogLevel, scope: string, message: string, ref?: number): void {
+    db.prepare("INSERT INTO logs (ts, level, scope, ref, message) VALUES (?, ?, ?, ?, ?)").run(
+        new Date().toISOString(),
+        level,
+        scope,
+        ref ?? null,
+        message,
+    );
+    db.prepare("DELETE FROM logs WHERE id <= (SELECT MAX(id) FROM logs) - ?").run(LOG_LIMIT);
+}
+
+export interface LogRow {
+    id: number;
+    ts: string;
+    level: string;
+    scope: string;
+    ref: number | null;
+    message: string;
+}
+
+/** The newest entries past the client's cursor, ascending. */
+export function listLogs(after: number, limit: number): LogRow[] {
+    return db
+        .prepare(
+            "SELECT * FROM (SELECT id, ts, level, scope, ref, message FROM logs WHERE id > ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
+        )
+        .all(after, limit) as LogRow[];
+}
+
+export function clearLogs(): number {
+    return Number(db.prepare("DELETE FROM logs").run().changes);
 }

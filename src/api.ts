@@ -1,4 +1,4 @@
-import type { RowDTO, ScanSinksDTO, SinkDTO, StateDTO } from "./types";
+import type { LogDTO, RowDTO, ScanSinksDTO, SinkDTO, StateDTO } from "./types";
 
 async function json<T>(response: Response): Promise<T> {
     if (!response.ok) {
@@ -152,6 +152,15 @@ export interface ProgressDTO {
 /** Snapshot of the running pull/push; null when the tool is idle. */
 export function fetchProgress(): Promise<ProgressDTO | null> {
     return call<ProgressDTO | null>("/api/progress", "GET");
+}
+
+/** Log entries past the given id, ascending. */
+export function fetchLogs(after: number, limit = 300): Promise<{ logs: LogDTO[] }> {
+    return call<{ logs: LogDTO[] }>(`/api/logs?after=${after}&limit=${limit}`, "GET");
+}
+
+export function clearLogs(): Promise<{ ok: boolean; cleared: number }> {
+    return call<{ ok: boolean; cleared: number }>("/api/logs/clear", "POST", {});
 }
 
 export interface GenerateSinkDTO {

@@ -72,4 +72,14 @@ export interface ScanSinksDTO {
     sinks: SinkDTO[];
 }
 
+/** One operational log entry; ids only grow, so clients poll incrementally. */
+export interface LogDTO {
+    id: number;
+    ts: string;
+    level: "info" | "warn" | "error";
+    scope: string;
+    ref: number | null;
+    message: string;
+}
+
 export { TAXONOMY_ORDER, TAXONOMY_LABELS } from "../shared/import";

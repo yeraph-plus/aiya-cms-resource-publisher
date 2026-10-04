@@ -5,6 +5,7 @@ import Grid from "./components/Grid";
 import Detail from "./components/Detail";
 import SettingsPanel from "./components/SettingsPanel";
 import ImportPanel from "./components/ImportPanel";
+import LogConsole from "./components/LogConsole";
 
 export type Filter = "all" | "dirty" | "conflict" | "new" | "missing";
 
@@ -22,6 +23,9 @@ export default function App() {
     const [busy, setBusy] = useState(false);
     const [toast, setToast] = useState<Toast | null>(null);
     const [revision, setRevision] = useState(0);
+    // Bumped after every operation so the log console catches up instantly
+    // instead of waiting for its poll tick.
+    const [logTick, setLogTick] = useState(0);
     // Progress of the running pull/push, polled while busy; null when idle.
     const [progress, setProgress] = useState<api.ProgressDTO | null>(null);
     // Right panel width, persisted across sessions; draggable via the divider.
@@ -86,6 +90,7 @@ export default function App() {
                 notify("err", `操作失败：${String(error)}`);
             } finally {
                 setBusy(false);
+                setLogTick((tick) => tick + 1);
             }
         },
         [notify],
@@ -382,6 +387,8 @@ export default function App() {
                     )}
                 </aside>
             </div>
+
+            <LogConsole refreshKey={logTick} />
 
             {toast && (
                 <div

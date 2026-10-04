@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import {
+    clearLogs,
     dbPath,
     deletePost,
     getPost,
@@ -13,8 +14,10 @@ import {
     importPosts,
     insertPost,
     listAuthors,
+    listLogs,
     listPosts,
     listTerms,
+    logEvent,
     parseSnapshot,
     setSetting,
     setTermRefs,
@@ -506,6 +509,21 @@ function errorMessage(error: unknown): string {
 
     app.get("/api/progress", async () => getProgress());
 
+    // The operational log: the client polls incrementally by id, so a full
+    // reload hands it the newest window and a running client only the delta.
+    app.get("/api/logs", async (request) => {
+        const query = request.query as { after?: string; limit?: string };
+        const after = Number(query.after ?? "0");
+        const limit = Number(query.limit ?? "300");
+        return {
+            logs: listLogs(Number.isFinite(after) && after >= 0 ? after : 0, Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 1000) : 300),
+        };
+    });
+
+    app.post("/api/logs/clear", async () => {
+        return { ok: true, cleared: clearLogs() };
+    });
+
     const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
     if (existsSync(distDir)) {
         await app.register(fastifyStatic, { root: distDir });
@@ -581,16 +599,19 @@ if (isEntry) {
             }
             const squatter = listenerPid(PORT);
             if (!squatter || !(await isOurStateEndpoint(PORT))) {
+                logEvent("error", "应用", `端口 ${PORT} 被其它进程占用，无法启动（PID ${squatter?.pid ?? "?"}）`);
                 console.error(
                     `端口 ${PORT} 被其它进程占用（PID ${squatter?.pid ?? "?"}${squatter?.image ? `，${squatter.image}` : ""}）——不是本工具实例，请自行处理后再启动。`,
                 );
                 process.exit(1);
             }
+            logEvent("warn", "应用", `端口 ${PORT} 上的残留实例被接管（PID ${squatter.pid}，强杀遗留的孤儿）`);
             console.log(`端口 ${PORT} 上是本工具的残留实例（PID ${squatter.pid}，强杀遗留的孤儿），接管中……`);
             killTree(squatter.pid);
             await new Promise((resolve) => setTimeout(resolve, 800));
             continue;
         }
+        logEvent("info", "应用", `发帖器已启动：http://localhost:${PORT}`);
         console.log(`AIYA Publisher listening on http://localhost:${PORT}`);
         console.log(`db: ${dbPath}`);
         break;

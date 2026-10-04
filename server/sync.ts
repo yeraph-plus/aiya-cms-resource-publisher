@@ -3,6 +3,7 @@ import {
     getSettings,
     insertPost,
     listPosts,
+    logEvent,
     parseSnapshot,
     replaceTerms,
     setSetting,
@@ -162,10 +163,12 @@ export async function runSync(): Promise<SyncOutcome> {
         probe = await ping(site);
     } catch (error) {
         outcome.error = message(error);
+        logEvent("error", "同步", `连接失败：${outcome.error}`);
         return outcome;
     }
     if (!probe.resourceAvailable) {
         outcome.error = "站点上没有 resource 文章类型（aiya-core 未启用？）。";
+        logEvent("error", "同步", outcome.error);
         return outcome;
     }
 
@@ -207,6 +210,7 @@ export async function runSync(): Promise<SyncOutcome> {
                     mergeRemote(item, outcome);
                 } catch {
                     outcome.skipped += 1;
+                    logEvent("warn", "同步", `#${item.id} ${item.title}：数据无法合并，已跳过`, item.id);
                     continue;
                 }
                 if (item.modifiedGmt > maxModified) {
@@ -249,9 +253,16 @@ export async function runSync(): Promise<SyncOutcome> {
             }
         }
         outcome.ok = true;
+        logEvent(
+            "info",
+            "同步",
+            `拉取完成：获取 ${outcome.fetched}，新增 ${outcome.created}，刷新 ${outcome.refreshed}，冲突 ${outcome.conflicts}，线上缺失 ${outcome.missing}` +
+                (outcome.skipped > 0 ? `，跳过畸形 ${outcome.skipped}` : ""),
+        );
         return outcome;
     } catch (error) {
         outcome.error = message(error);
+        logEvent("error", "同步", `拉取中断：${outcome.error}`);
         return outcome;
     }
 }

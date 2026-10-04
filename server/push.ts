@@ -2,6 +2,7 @@ import {
     getSettings,
     getTermRefs,
     listDirtyPosts,
+    logEvent,
     setTermRefs,
     updatePostRow,
     upsertAuthor,
@@ -112,6 +113,7 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
         outcome.ok = true;
         return outcome;
     }
+    logEvent("info", "推送", `推送开始：${rows.length} 行`);
 
     let transportFailures = 0;
     for (const [index, row] of rows.entries()) {
@@ -121,6 +123,7 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
             outcome.failed += 1;
             outcome.errors.push({ localId: row.localId, title: row.title, message: errors.join(" ") });
             updatePostRow(row.localId, { lastError: errors.join(" ") });
+            logEvent("error", "推送", `#${row.postId ?? "新行"} ${row.title}：${errors.join(" ")}`, row.postId ?? undefined);
             continue;
         }
 
@@ -140,11 +143,13 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
             applyResponse(row, item);
             outcome.pushed += 1;
             transportFailures = 0;
+            logEvent("info", "推送", `#${item.id} ${row.title}：已写入站点`, item.id);
         } catch (error) {
             const text = message(error);
             updatePostRow(row.localId, { lastError: text });
             outcome.errors.push({ localId: row.localId, title: row.title, message: text });
             outcome.failed += 1;
+            logEvent("error", "推送", `#${row.postId ?? "新行"} ${row.title}：${text}`, row.postId ?? undefined);
             if (error instanceof WpError && error.status === 0) {
                 transportFailures += 1;
                 if (transportFailures >= TRANSPORT_ABORT_LIMIT) {
@@ -161,5 +166,10 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
     }
 
     outcome.ok = outcome.failed === 0;
+    if (outcome.error !== null) {
+        logEvent("error", "推送", outcome.error);
+    } else {
+        logEvent("info", "推送", `推送结束：成功 ${outcome.pushed}，失败 ${outcome.failed}`);
+    }
     return outcome;
 }
