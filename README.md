@@ -43,15 +43,18 @@ npm run app:win    # vite build + 服务端 esbuild bundle + 切换 electron ABI
 - **术语引用**：数字 = 线上既有 term id；`name:xxx` = 线上尚无的新标签（推送时由站点自动创建，需要 `manage_terms` 能力）。推送响应回填真实 id。
 - **CSV 导入**：「导入 CSV」批量建本地新行入待推送队列（不推送，推送走既有按钮）。首行表头，向导自动猜测列映射（标题/正文/状态/发布时间/发布者/六个术语列，可改）；标题必填、状态含中文别名（草稿/发布/定时）、发布时间折叠为 `YYYY-MM-DDTHH:mm`（future 必须带时间）；「发布者(账号)」按显示名匹配作者表（未匹配默认该行报错，可切换回落默认作者）——裸「作者」表头是 `resource_author` 术语列，不是账号；编码自动识别 UTF-8/GBK/UTF-16，单次上限 5000 行。好行单事务整体入队、坏行按行号报原因，重复导入同一文件会建重复行。向导里的预览计数与实际写入跑的是同一份 `shared/import.ts` 纯函数。
 - **fileserve 编辑器**：组卡片 + 适配器下拉，字段表与归一化语义在 `shared/fileserve.ts` 逐字镜像 PHP 侧（未知键丢弃、缺省补默认、price 折非负 int）；空配置推送 = 清除线上文件列表（会触发刷时间）。
-- **fileserve 补完**：已发布且文件列表为空的行可「生成文件骨架」——补完工作目录（设置里配）下创建以文章命名的目录（默认 post id，可切 ID-slug / slug）+ `fileserve.json` 载体（组模板可配，默认百度+夸克各一组）。网盘客户端把文件传进同名目录、分享链回填载体（脚本或手动粘贴），然后「补完推送」把载体编译出的配置**只 PUT fileserve**（标题/正文/术语一概不动；值有变化按站点规则刷发布时间）。回写是 scoped 的：只动 fileserve、modified 与快照对应字段，脏行的其它在制编辑与推送队列位置不受影响。已有文件列表的行不走此流程（补完推送会整体替换 meta 键）；载体是离线阶段唯一真源，推送记摘要，无新增链接不重推。
+- **fileserve 补完**：文件列表就是线上 `aiya_core_fileserve` 本体，就地编辑，补完 = 组的就绪生命周期，没有独立的载体文件。已发布行在文件列表「+ 添加组」时自动在「自动创建文件夹位置」（设置里配）创建上传目录 `{帖子ID}-{文章标题}`（非法字符净化、超长按码点截断；识别只认最前面的 ID，手动改名不受影响；关联记录在 db，删本地行只解除关联、不动磁盘目录）。文件放进目录 → 网盘客户端上传分享 → 链接/提取码回填编辑器 → 「补完推送」**只 PUT fileserve**（标题/正文/术语一概不动；值有变化按站点规则刷发布时间）。推送前载荷自检：每个组按适配器检查必填字段（网盘链接→链接、OpenList 目录→路径、OpenList 搜索→关键词、GoFile→文件夹 ID），缺哪个整行拒绝并点名组号；推送成功按站点确认的形状记摘要（`fileserve_pushed_digest`），无变化不重推，整行推送成功同样刷新该摘要。回写是 scoped 的：只动 fileserve、modified 与快照对应字段，脏行的其它在制编辑与推送队列位置不受影响。空配置（{}）不进补完通道——「清空线上列表」是整行推送的语义。
+- **运行日志**：底部日志面板登记全部操作事件（同步/推送/补完/目录/启动），按 id 增量轮询、可折叠、一键清空；服务端保留最近 2000 条滚动裁剪。表格的错误列已撤，行错误改为「标记」列的红色徽章（悬停看原文）。
 - 本地删行只删本地记录，**不删除线上帖子**。
 - **UI 约定**：无嵌套模态框——表格行内编辑 + 右侧详情面板承载主编辑面；弹层只允许单层（设置、CSV 导入等）。
 
 ## 数据（publisher.db，SQLite / WAL）
 
-- `settings`：站点地址、用户名、应用密码（**本地明文**，本机工具可接受，勿把 db 文件提交或外传）、HTTP 代理、默认作者、同步游标
+- `settings`：站点地址、用户名、应用密码（**本地明文**，本机工具可接受，勿把 db 文件提交或外传）、HTTP 代理、默认作者、同步游标、自动创建文件夹位置
 - `authors` / `terms`：作者登记表（同步自动收录 + 手工备注）、词法术语缓存
-- `posts` + `post_terms`：行状态（含 dirty/conflict/missing 标记、last_error、快照 JSON）、线上 slug（取自 permalink，供补完目录命名）与术语引用
+- `posts` + `post_terms`：行状态（含 dirty/conflict/missing 标记、last_error、快照 JSON）、线上 slug（取自 permalink）、fileserve 推送基准摘要（`fileserve_pushed_digest`，取站点确认形状）与术语引用
+- `fileserve_dirs`：上传暂存目录关联（post_id 主键，与 posts 互锁；删本地行即清除关联，磁盘目录不动）
+- `logs`：运行日志（level/scope/ref/message，滚动保留 2000 条）
 
 `PUBLISHER_DATA` 环境变量可重定向数据目录（默认进程工作目录）。
 
@@ -59,7 +62,7 @@ npm run app:win    # vite build + 服务端 esbuild bundle + 切换 electron ABI
 
 ```bash
 npm run check   # tsc 双配置（server/tests 与 web）
-npm test        # vitest：fileserve 模型与推送载荷构建
+npm test        # vitest：fileserve 模型、载荷构建、补完推送、暂存目录与日志等
 ```
 
 结构：`server/`（Fastify + better-sqlite3 + WP 客户端 + 同步/推送）、`src/`（React 19 + Tailwind 4 + AG Grid Community）、`shared/`（fileserve 数据模型与 CSV 导入模型，前后端共用）。
