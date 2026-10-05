@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AIYA 网盘分享回填（百度）
 // @namespace    aiya-netdisk
-// @version      0.5.2
+// @version      0.5.3
 // @description  在百度网盘 web 端定位发帖器同名目录、创建分享并把链接回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
 // @match        https://pan.baidu.com/*
 // @grant        GM_xmlhttpRequest
@@ -252,9 +252,9 @@
                 const pending = queue.filter((item) => !item.status || item.status === "fail");
                 if (pending.length === 0 || !running) {
                     if (pending.length === 0 && queue.every((item) => item.status === "done")) {
-                        setMsg("队列处理完毕。");
+                        setMsg("处理完毕");
                     } else if (pending.length === 0) {
-                        setMsg("队列为空，无可处理行（先在发帖器加空链接组，或清空组链接重取）。");
+                        setMsg("无待处理组");
                     }
                     break;
                 }
@@ -307,7 +307,7 @@
         }
         box.innerHTML = "";
         if (queue.length === 0) {
-            box.innerHTML = '<div style="color:#999;padding:6px 2px">队列为空：在发帖器里给已上线行添加空链接的网盘组后点「刷新队列」。</div>';
+            box.innerHTML = '<div style="color:#999;padding:6px 2px">无待处理组</div>';
             return;
         }
         queue.forEach((item, index) => {
@@ -318,7 +318,7 @@
                 `<div style="display:flex;gap:6px;align-items:baseline">` +
                 `<b style="flex:none">${item.dirName}</b>` +
                 `<span style="color:#888;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">组 #${item.groupId} · ${item.groupTitle}</span>` +
-                `<button data-aiya-act="process-one" data-aiya-arg="${index}" style="flex:none;cursor:pointer">处理</button></div>` +
+                `<button class="aiya-btn" data-aiya-act="process-one" data-aiya-arg="${index}" style="flex:none">处理</button></div>` +
                 `<div style="color:${color};white-space:normal">${item.statusText ?? "待处理"}</div>`;
             box.appendChild(row);
         });
@@ -346,8 +346,8 @@
                     </select>
                 </div>
                 <div style="display:flex;gap:6px;align-items:center">
-                    <button id="aiya-refresh" data-aiya-act="refresh" style="cursor:pointer">刷新队列</button>
-                    <button id="aiya-run" data-aiya-act="run" style="cursor:pointer">开始处理</button>
+                    <button id="aiya-refresh" class="aiya-btn" data-aiya-act="refresh">刷新队列</button>
+                    <button id="aiya-run" class="aiya-btn" data-aiya-act="run">开始处理</button>
                     <span id="aiya-msg" style="color:#888;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"></span>
                 </div>
                 <div id="aiya-queue" style="max-height:260px;overflow:auto"></div>
@@ -436,9 +436,12 @@
         // free space up so the hook hugs the LOGO.
         hook.style.cssText = [
             "cursor:pointer", "flex:none", "margin-left:10px", "margin-right:auto",
-            "padding:4px 2px", "font-size:13px", "color:#333", "user-select:none",
+            "padding:4px 12px", "font-size:13px", "color:#333", "user-select:none",
+            "background:#f1f1f1", "border:1px solid #ddd", "border-radius:6px",
         ].join(";");
         hook.setAttribute("data-aiya-act", "toggle");
+        hook.onmouseenter = () => (hook.style.background = "#e4e4e4");
+        hook.onmouseleave = () => (hook.style.background = "#f1f1f1");
         return hook;
     }
 
@@ -538,6 +541,12 @@
     );
 
     const mount = () => {
+        const style = document.createElement("style");
+        style.textContent = [
+            ".aiya-btn{cursor:pointer;background:#f1f1f1;color:#333;border:1px solid #ddd;border-radius:6px;padding:4px 12px;font-size:12px}",
+            ".aiya-btn:hover{background:#e4e4e4}",
+        ].join("\n");
+        document.head.appendChild(style);
         document.body.appendChild(panel);
         renderPanel();
         mountHook();
