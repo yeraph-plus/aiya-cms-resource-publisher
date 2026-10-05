@@ -17,8 +17,7 @@ import {
     type WpItem,
 } from "./wp.js";
 import { buildPayload } from "./payload.js";
-import { mergeRemoteFileserve, normalizeConfig, pushableConfig } from "../shared/fileserve.js";
-import { configDigest } from "./digest.js";
+import { mergeRemoteFileserve, normalizeConfig, productionConfig } from "../shared/fileserve.js";
 import { setProgress } from "./progress.js";
 
 /** Consecutive transport-level failures (status 0) before the run aborts. */
@@ -77,13 +76,10 @@ function applyResponse(row: PostRow, item: WpItem): void {
         dateLocal: state.dateLocal,
         dateGmt: state.dateGmt,
         modifiedGmt: state.modifiedGmt,
-        // The site confirms the flagged subset; local draft groups (push off)
-        // ride along so they are not lost to the whole-row write-back.
+        // The site confirms the production subset; the local netdisk fields
+        // are re-attached so the pipelines keep their ownership.
         fileserve: mergeRemoteFileserve(item.fileserve, row.fileserve),
         slug: parseSlugFromLink(item.link),
-        // A successful whole-row write re-confirms the file list, so the
-        // digest baseline moves with it.
-        fileservePushedDigest: item.fileserve ? configDigest(item.fileserve) : null,
         dirty: false,
         conflict: false,
         missing: false,
@@ -132,14 +128,11 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
             continue;
         }
 
-        // The per-group 推送 switches decide what goes out: flagged groups
-        // form the payload with the flag stripped, drafts never leave the
-        // tool. A flagged group with an empty required field goes out as-is —
-        // the 文件缺项 badge is the warning, the push is the user's call.
+        // The whole config rides with the row push, empty links included —
+        // the local netdisk field is stripped (the site drops it anyway).
         let fileserveValue: string | null = row.fileserve;
         if (row.fileserve !== null) {
-            const { config: effective } = pushableConfig(config);
-            fileserveValue = JSON.stringify(effective);
+            fileserveValue = JSON.stringify(productionConfig(config));
         }
         try {
             const payload = buildPayload({ ...row, fileserve: fileserveValue }, getTermRefs(row.localId));

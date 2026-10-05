@@ -15,7 +15,6 @@ function row(patch: Partial<PostRow>): PostRow {
         modifiedGmt: "",
         fileserve: null,
         slug: null,
-        fileservePushedDigest: null,
         dirty: true,
         conflict: false,
         missing: false,

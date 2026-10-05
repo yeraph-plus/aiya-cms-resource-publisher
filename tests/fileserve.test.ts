@@ -3,9 +3,11 @@ import {
     ADAPTER_FIELDS,
     configSummary,
     emptyGroup,
+    mergeRemoteFileserve,
     nextId,
     normalizeConfig,
     priceDefault,
+    productionConfig,
     sanitizeId,
 } from "../shared/fileserve.js";
 
@@ -114,18 +116,41 @@ describe("fileserve model", () => {
         expect(config["1"]?.price).toBe(0);
     });
 
-    it("summarizes a config for the grid column, counting flagged groups only for the price", () => {
+    it("summarizes a config for the grid column", () => {
         const { config } = normalizeConfig({
             "1": { adapter: "platform", price: 5 },
             "2": { adapter: "openlist_list", price: 2 },
         });
         expect(configSummary(config)).toBe("2 组 · 7 分/次");
-        // A draft group shows in the count but never in the price.
-        const mixed = normalizeConfig({
-            "1": { adapter: "platform", price: 5 },
-            "2": { adapter: "openlist_list", price: 2, push: false },
-        });
-        expect(configSummary(mixed.config)).toBe("1/2 组 · 5 分/次");
         expect(configSummary(null)).toBe("—");
+    });
+
+    it("keeps the local netdisk field through normalization and defaults platform groups", () => {
+        const { config } = normalizeConfig({
+            "1": { adapter: "platform", url: "https://x", netdisk: "quark" },
+            "2": { adapter: "platform", url: "https://y" },
+            "3": { adapter: "openlist_list", path: "/d", netdisk: "quark" },
+        });
+        expect(config["1"]?.netdisk).toBe("quark");
+        // Untagged groups stay untagged (the lane treats them as baidu).
+        expect(config["2"]?.netdisk).toBeUndefined();
+        // The field is not platform-bound: any adapter may carry it.
+        expect(config["3"]?.netdisk).toBe("quark");
+    });
+
+    it("strips the netdisk field for the production payload and re-attaches it on merge", () => {
+        const { config } = normalizeConfig({
+            "1": { adapter: "platform", url: "https://x", netdisk: "baidu" },
+            "2": { adapter: "openlist_list", path: "/d" },
+        });
+        expect(productionConfig(config)).toEqual({
+            "1": { adapter: "platform", url: "https://x", code: "", title: "", price: 0 },
+            "2": { adapter: "openlist_list", path: "/d", password: "", per_page: 0, title: "", price: 0 },
+        });
+
+        // The site echo carries no ownership; the merge re-attaches it.
+        const merged = JSON.parse(mergeRemoteFileserve(productionConfig(config), JSON.stringify(config))!);
+        expect(merged["1"].netdisk).toBe("baidu");
+        expect(merged["2"].netdisk).toBeUndefined();
     });
 });

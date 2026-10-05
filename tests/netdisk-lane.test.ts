@@ -12,13 +12,13 @@ let app: FastifyInstance;
 let buildApp: typeof import("../server/index.js").buildApp;
 let db: typeof import("../server/db.js");
 
-const platformGroup = (url: string, push = true) => ({
+const platformGroup = (url: string, netdisk?: string) => ({
     adapter: "platform",
     url,
     code: "a1b2",
     title: "百度网盘",
     price: 0,
-    ...(push ? {} : { push: false }),
+    ...(netdisk !== undefined ? { netdisk } : {}),
 });
 
 beforeAll(async () => {
@@ -40,43 +40,48 @@ beforeEach(() => {
 });
 
 describe("netdisk queue", () => {
-    it("lists only published rows' empty platform groups, with the staging dir name", async () => {
-        const filled = db.insertPost({
-            status: "publish",
-            title: "已完成",
-            postId: 501,
-            fileserve: JSON.stringify({ "1": platformGroup("https://pan.baidu.com/s/x") }),
-        });
-        const draft = db.insertPost({
+    it("hands each pipeline only its own empty-link groups", async () => {
+        const baiduRow = db.insertPost({
             status: "publish",
             title: "测试 文章",
             postId: 502,
             fileserve: JSON.stringify({
-                "1": platformGroup("", false),
-                "2": platformGroup("https://pan.baidu.com/s/y"),
+                "1": platformGroup("", "baidu"),
+                "2": platformGroup("https://pan.baidu.com/s/y", "baidu"),
             }),
         });
-        db.insertPost({ status: "draft", title: "未上线", fileserve: JSON.stringify({ "1": platformGroup("") }) });
-        db.insertPost({ status: "publish", title: "无列表", postId: 503 });
+        db.insertPost({
+            status: "publish",
+            title: "夸克行",
+            postId: 503,
+            fileserve: JSON.stringify({ "1": platformGroup("", "quark") }),
+        });
+        db.insertPost({ status: "draft", title: "未上线", fileserve: JSON.stringify({ "1": platformGroup("", "baidu") }) });
+        db.insertPost({ status: "publish", title: "无列表", postId: 504 });
 
-        const res = await app.inject({ method: "GET", url: "/api/netdisk/queue" });
+        const res = await app.inject({ method: "GET", url: "/api/netdisk/queue?netdisk=baidu" });
         expect(res.statusCode).toBe(200);
         const queue = res.json().queue;
+        // The untagged empty group counts as baidu; quark's is invisible here.
         expect(queue).toHaveLength(1);
         expect(queue[0]).toMatchObject({
-            localId: draft,
+            localId: baiduRow,
             postId: 502,
             groupId: "1",
+            netdisk: "baidu",
             dirName: "00502-测试 文章",
             title: "测试 文章",
             groupTitle: "百度网盘",
         });
-        // A replayed fill finds nothing: the filled row is not in the queue.
-        expect(queue.every((item: { localId: number }) => item.localId !== filled)).toBe(true);
+
+        // The quark pipeline asks for its own lane and gets only its group.
+        const quark = await app.inject({ method: "GET", url: "/api/netdisk/queue?netdisk=quark" });
+        expect(quark.json().queue).toHaveLength(1);
+        expect(quark.json().queue[0].postId).toBe(503);
     });
 
     it("exposes CORS to the netdisk origin and answers the preflight", async () => {
-        const res = await app.inject({ method: "GET", url: "/api/netdisk/queue" });
+        const res = await app.inject({ method: "GET", url: "/api/netdisk/queue?netdisk=baidu" });
         expect(res.headers["access-control-allow-origin"]).toBe("https://pan.baidu.com");
 
         const preflight = await app.inject({ method: "OPTIONS", url: "/api/netdisk/result" });
@@ -87,18 +92,18 @@ describe("netdisk queue", () => {
 });
 
 describe("netdisk result write-back", () => {
-    it("fills the link, flags the group for push, and marks the row dirty", async () => {
+    it("fills the link, defaults the title from the netdisk, and marks the row dirty", async () => {
         const localId = db.insertPost({
             status: "publish",
             title: "行",
             postId: 510,
-            fileserve: JSON.stringify({ "1": platformGroup("", false) }),
+            fileserve: JSON.stringify({ "1": platformGroup("", "baidu") }),
         });
 
         const res = await app.inject({
             method: "POST",
             url: "/api/netdisk/result",
-            payload: { localId, groupId: "1", url: " https://pan.baidu.com/s/1abc ", code: " a9k2 " },
+            payload: { localId, groupId: "1", netdisk: "baidu", url: " https://pan.baidu.com/s/1abc ", code: " a9k2 " },
         });
         expect(res.statusCode).toBe(200);
         expect(res.json().ok).toBe(true);
@@ -111,37 +116,40 @@ describe("netdisk result write-back", () => {
             code: "a9k2",
             title: "百度网盘",
             price: 0,
-            push: true,
+            netdisk: "baidu",
         });
         expect(after.dirty).toBe(true);
     });
 
-    it("refuses missing rows/groups, non-platform groups, and overwriting a filled group", async () => {
+    it("refuses missing rows/groups, cross-pipeline writes, and overwriting a filled group", async () => {
         const localId = db.insertPost({
             status: "publish",
             title: "行",
             postId: 511,
             fileserve: JSON.stringify({
-                "1": platformGroup("https://pan.baidu.com/s/live"),
-                "2": { adapter: "openlist_list", path: "/x", password: "", per_page: 0, title: "", price: 0 },
+                "1": platformGroup("https://pan.baidu.com/s/live", "baidu"),
+                "2": platformGroup("", "quark"),
+                "3": { adapter: "openlist_list", path: "/x", password: "", per_page: 0, title: "", price: 0 },
             }),
         });
 
-        const gone = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { localId: 999, groupId: "1", url: "https://x" } });
-        expect(gone.statusCode).toBe(400);
+        const gone = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { localId: 999, groupId: "1", netdisk: "baidu", url: "https://x" } });
         expect(gone.json().error).toContain("本地行不存在");
 
-        const noGroup = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { localId, groupId: "9", url: "https://x" } });
+        const noGroup = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { localId, groupId: "9", netdisk: "baidu", url: "https://x" } });
         expect(noGroup.json().error).toContain("组 #9 不存在");
 
-        const notPlatform = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { localId, groupId: "2", url: "https://x" } });
+        const notPlatform = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { localId, groupId: "3", netdisk: "baidu", url: "https://x" } });
         expect(notPlatform.json().error).toContain("不是网盘链接组");
 
-        const replay = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { localId, groupId: "1", url: "https://x" } });
-        expect(replay.statusCode).toBe(400);
+        // The quark group refuses the baidu script — pipelines cannot clobber.
+        const cross = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { localId, groupId: "2", netdisk: "baidu", url: "https://x" } });
+        expect(cross.json().error).toContain("夸克网盘 管线");
+
+        const replay = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { localId, groupId: "1", netdisk: "baidu", url: "https://x" } });
         expect(replay.json().error).toContain("拒绝覆盖");
 
-        const empty = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { localId, groupId: "1", url: "   " } });
+        const empty = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { localId, groupId: "1", netdisk: "baidu", url: "   " } });
         expect(empty.json().error).toContain("分享链接为空");
 
         const missing = await app.inject({ method: "POST", url: "/api/netdisk/result", payload: { url: "https://x" } });

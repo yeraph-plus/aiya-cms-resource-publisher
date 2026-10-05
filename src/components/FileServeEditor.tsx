@@ -2,8 +2,10 @@ import {
     ADAPTER_FIELDS,
     ADAPTER_LABELS,
     COMMON_FIELDS,
+    NETDISK_OPTIONS,
     emptyGroup,
     fieldLabel,
+    netdiskLabel,
     nextId,
     priceDefault,
     type FieldValue,
@@ -46,15 +48,15 @@ export default function FileServeEditor({ config, onChange, onGroupAdded }: Prop
             return;
         }
         // A price the user never touched (0 or the old adapter's default)
-        // follows the new adapter's suggestion; a custom price and the push
-        // flag survive.
+        // follows the new adapter's suggestion; a custom price, the netdisk
+        // ownership and the title survive.
         const untouched = (previous.price ?? 0) === 0 || previous.price === priceDefault(previous.adapter);
         commit({
             ...groups,
             [id]: {
                 ...emptyGroup(adapter),
                 title: previous.title ?? "",
-                push: previous.push ?? false,
+                ...(previous.netdisk !== undefined ? { netdisk: previous.netdisk } : {}),
                 ...(untouched ? {} : { price: previous.price ?? 0 }),
             },
         });
@@ -66,6 +68,20 @@ export default function FileServeEditor({ config, onChange, onGroupAdded }: Prop
             return;
         }
         commit({ ...groups, [id]: { ...group, [field]: value } });
+    };
+
+    /** Switch the owning pipeline. The title follows when it is empty or
+     * still carries an auto netdisk name — a hand-written title survives. */
+    const changeNetdisk = (id: string, netdisk: string): void => {
+        const group = groups[id];
+        if (!group) {
+            return;
+        }
+        const wasAuto = group.title === "" || NETDISK_OPTIONS.some((option) => option.label === group.title);
+        commit({
+            ...groups,
+            [id]: { ...group, netdisk, ...(wasAuto ? { title: netdiskLabel(netdisk) } : {}) },
+        });
     };
 
     return (
@@ -122,22 +138,27 @@ export default function FileServeEditor({ config, onChange, onGroupAdded }: Prop
                                     </label>
                                 );
                             })}
-                            {/* The per-group 推送 switch, styled as one more
-                                field cell: unchecked = local draft, never
-                                pushed; checked = rides with the main push. */}
-                            <div className="block">
-                                <span className="lbl">推送</span>
-                                <label className="inline-flex items-center gap-1.5 cursor-pointer mt-0.5">
-                                    <input
-                                        type="checkbox"
-                                        checked={group.push !== false}
-                                        onChange={(event) => setField(id, "push", event.target.checked)}
-                                    />
-                                    <span className={group.push === false ? "text-neutral-400" : "text-neutral-700"}>
-                                        {group.push === false ? "草稿（不推送）" : "随主推送"}
-                                    </span>
-                                </label>
-                            </div>
+                            {/* The owning pipeline, styled as one more field
+                                cell: it decides which netdisk script claims
+                                the group, and the title follows it. */}
+                            {group.adapter === "platform" && (
+                                <div className="block">
+                                    <span className="lbl">网盘</span>
+                                    <div className="flex gap-3 mt-0.5">
+                                        {NETDISK_OPTIONS.map((option) => (
+                                            <label key={option.id} className="inline-flex items-center gap-1 cursor-pointer">
+                                                <input
+                                                    type="radio"
+                                                    name={`aiya-netdisk-${id}`}
+                                                    checked={group.netdisk === undefined ? option.id === "baidu" : group.netdisk === option.id}
+                                                    onChange={() => changeNetdisk(id, option.id)}
+                                                />
+                                                <span>{option.label}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 );
@@ -149,7 +170,7 @@ export default function FileServeEditor({ config, onChange, onGroupAdded }: Prop
                         + 添加组
                     </button>
                     {entries.length === 0 && (
-                        <span className="text-xs text-neutral-400">没有数据组（推送空配置会清除线上文件列表；新组默认不勾推送）</span>
+                        <span className="text-xs text-neutral-400">没有数据组（推送空配置会清除线上文件列表；空链接组由网盘脚本回填）</span>
                     )}
                 </div>
                 {entries.length > 0 && (

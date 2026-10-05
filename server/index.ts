@@ -459,7 +459,9 @@ function errorMessage(error: unknown): string {
 
     app.get("/api/netdisk/queue", async (request, reply) => {
         netdiskCors(reply);
-        return { queue: buildQueue() };
+        const query = request.query as { netdisk?: string };
+        const netdisk = typeof query.netdisk === "string" && query.netdisk.trim() !== "" ? query.netdisk.trim() : "baidu";
+        return { netdisk, queue: buildQueue(netdisk) };
     });
 
     app.post("/api/netdisk/result", async (request, reply) => {
@@ -469,10 +471,11 @@ function errorMessage(error: unknown): string {
         const groupId = String(body.groupId ?? "");
         const url = String(body.url ?? "");
         const code = String(body.code ?? "");
+        const netdisk = typeof body.netdisk === "string" && body.netdisk.trim() !== "" ? body.netdisk.trim() : "baidu";
         if (!Number.isInteger(localId) || localId <= 0 || groupId === "") {
             return reply.code(400).send({ error: "缺少 localId 或 groupId。" });
         }
-        const outcome = applyResult(localId, groupId, url, code);
+        const outcome = applyResult(netdisk, localId, groupId, url, code);
         if (!outcome.ok) {
             return reply.code(400).send({ error: outcome.error });
         }

@@ -22,11 +22,11 @@ export interface TermInfo {
     slug: string;
 }
 
-/** Server-recomputed push state of a row's flagged file groups — the grid
- * badge's ground truth. */
+/** Server-recomputed work state of a row's file groups — the grid badge's
+ * ground truth: what the netdisk pipelines can fill right now. */
 export interface FileServeStateDTO {
-    status: "none" | "incomplete" | "draft" | "ready" | "pushed";
-    missing: string[];
+    status: "unmounted" | "fillable" | "complete";
+    items: { groupId: string; label: string }[];
 }
 
 export interface RowDTO {

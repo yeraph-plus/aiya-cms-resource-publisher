@@ -68,29 +68,6 @@ export function fieldLabel(id: string): string {
     return FIELD_LABELS[id] ?? id;
 }
 
-/**
- * The one field each adapter cannot work without — a group missing it would
- * publish a dead download entry, so the completion push refuses the row (and
- * the editor points at the field). Shared by the web UI and the server.
- */
-export const ADAPTER_REQUIRED: Record<string, string> = {
-    platform: "url",
-    openlist_list: "path",
-    openlist_search: "keywords",
-    gofile_api: "folder_id",
-};
-
-/** The required field id when it carries nothing usable, else null. */
-export function groupMissingField(group: FileGroup): string | null {
-    const required = ADAPTER_REQUIRED[group.adapter];
-    if (required === undefined) {
-        // normalizeConfig rejects unknown adapters before this can matter.
-        return null;
-    }
-    const value = group[required];
-    const empty = typeof value === "string" ? value.trim() === "" : value === null || value === undefined;
-    return empty ? required : null;
-}
 
 export const ADAPTER_LABELS: Record<string, string> = {
     platform: "网盘链接",
@@ -99,12 +76,29 @@ export const ADAPTER_LABELS: Record<string, string> = {
     gofile_api: "GoFile",
 };
 
-export type FieldValue = string | number | null | boolean;
-/** One group. `push` is a local-only extension the production domain never
- * sees: false = local draft (excluded from pushes), anything else = included.
- * It is stripped from the payload and the site drops it anyway. */
-export type FileGroup = Record<string, FieldValue> & { adapter: string; push?: boolean };
+export type FieldValue = string | number | null;
+/** One group. `netdisk` is a local-only extension the production domain never
+ * sees: which netdisk pipeline owns this group (baidu/quark/…). It decides
+ * lane claiming (empty link + matching netdisk = work for that pipeline) and
+ * is stripped from the payload; the site drops it anyway. */
+export type FileGroup = Record<string, FieldValue> & { adapter: string; netdisk?: string };
 export type FileServeConfig = Record<string, FileGroup>;
+
+/** The known netdisk pipelines. Adding a pipeline = one entry here plus a
+ * script instance asking the queue for its id. */
+export const NETDISK_OPTIONS: { id: string; label: string }[] = [
+    { id: "baidu", label: "百度网盘" },
+    { id: "quark", label: "夸克网盘" },
+];
+
+export function netdiskLabel(id: string | undefined): string {
+    return NETDISK_OPTIONS.find((option) => option.id === id)?.label ?? (id || "baidu");
+}
+
+/** A group's owning pipeline; groups predating the field default to baidu. */
+export function groupNetdisk(group: FileGroup): string {
+    return typeof group.netdisk === "string" && group.netdisk.trim() !== "" ? group.netdisk : "baidu";
+}
 /** A submitted key reduced to something storable; "" when nothing is left of it. */
 export function sanitizeId(raw: string): string {
     return raw.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 16);
@@ -182,7 +176,9 @@ export function normalizeConfig(raw: unknown): { config: FileServeConfig; errors
         config[id] = {
             ...normalized,
             adapter,
-            ...(typeof group.push === "boolean" ? { push: group.push } : {}),
+            ...(typeof group.netdisk === "string" && group.netdisk.trim() !== ""
+                ? { netdisk: group.netdisk.trim().slice(0, 16) }
+                : {}),
         } as FileGroup;
     }
 
@@ -192,55 +188,60 @@ export function normalizeConfig(raw: unknown): { config: FileServeConfig; errors
     return { config, errors: [] };
 }
 
-/** All fields at their defaults, ready for the editor; the price pre-fills per
- * adapter and a fresh group starts as a local draft (push: false). */
+/** All fields at their defaults, ready for the editor. A platform group
+ * targets the baidu pipeline by default and its title carries the netdisk
+ * name — empty titles are not a valid state. */
 export function emptyGroup(adapter: string): FileGroup {
-    const group: FileGroup = { adapter, push: false };
+    const group: FileGroup = { adapter };
     for (const field of [...(ADAPTER_FIELDS[adapter] ?? []), ...COMMON_FIELDS]) {
         group[field.id] = field.default;
     }
     // The declared default (0) lands first; the adapter suggestion wins.
     group.price = priceDefault(adapter);
+    if (adapter === "platform") {
+        group.netdisk = "baidu";
+        group.title = netdiskLabel("baidu");
+    }
     return group;
 }
 
-/** The production payload for a row: flagged groups only (push !== false),
- * flag field stripped. A flagged group missing its required field still goes
- * out — `blocked` reports it for the badge, the push itself is the user's
- * call. */
-export function pushableConfig(config: FileServeConfig): {
-    config: FileServeConfig;
-    blocked: { id: string; field: string }[];
-} {
+/** The production payload for a row: every group with the local netdisk
+ * field stripped — the whole config always rides with the row push, empty
+ * links included (the lane fills them in a later pass). */
+export function productionConfig(config: FileServeConfig): FileServeConfig {
     const effective: FileServeConfig = {};
-    const blocked: { id: string; field: string }[] = [];
     for (const [id, group] of Object.entries(config)) {
-        if (group.push === false) {
-            continue;
-        }
-        const field = groupMissingField(group);
-        if (field !== null) {
-            blocked.push({ id, field });
-        }
-        const { push, ...production } = group;
+        const { netdisk, ...production } = group;
         effective[id] = production as FileGroup;
     }
-    return { config: effective, blocked };
+    return effective;
 }
 
 /** The local file list after a site confirmation: the site's production
- * config replaces everything it carries, while local draft groups
- * (push === false) ride along untouched — they were excluded from the push
- * on purpose and must not be lost to the whole-row write-back or a sync. */
+ * config is authoritative for what it carries, while each surviving group
+ * gets its local netdisk field re-attached (the site dropped it) and local
+ * groups the site does not know about ride along untouched. */
 export function mergeRemoteFileserve(remote: unknown, localRaw: string | null): string | null {
     const remoteConfig =
         remote !== null && typeof remote === "object" && !Array.isArray(remote) ? (remote as FileServeConfig) : null;
     const local = localRaw ? normalizeConfig(localRaw).config : {};
-    const drafts = Object.entries(local).filter(([id, group]) => group.push === false && remoteConfig?.[id] === undefined);
-    if (remoteConfig === null && drafts.length === 0) {
-        return null;
+    const merged: FileServeConfig = {};
+    for (const [id, group] of Object.entries(remoteConfig ?? {})) {
+        const localGroup = local[id];
+        merged[id] = {
+            ...group,
+            ...(localGroup?.netdisk !== undefined ? { netdisk: localGroup.netdisk } : {}),
+        } as FileGroup;
     }
-    return JSON.stringify({ ...(remoteConfig ?? {}), ...Object.fromEntries(drafts) });
+    for (const [id, group] of Object.entries(local)) {
+        if (merged[id] === undefined) {
+            merged[id] = { ...group };
+        }
+    }
+    if (Object.keys(merged).length === 0) {
+        return remoteConfig !== null ? "{}" : null;
+    }
+    return JSON.stringify(merged);
 }
 
 /** The next free short id: one past the highest numeric key, like the domain. */
@@ -254,15 +255,15 @@ export function nextId(config: FileServeConfig): string {
     return String(highest + 1);
 }
 
-/** A display summary: how many groups (active/total when drafts exist) and
- * what the flagged groups cost per visit — drafts never charge. */
+/** A display summary: how many groups and what they cost per file in total. */
 export function configSummary(config: FileServeConfig | null): string {
     if (!config) {
         return "—";
     }
-    const groups = Object.values(config);
-    const active = groups.filter((group) => group.push !== false);
-    const price = (list: FileGroup[]) => list.reduce((sum, group) => sum + (typeof group.price === "number" ? group.price : 0), 0);
-    const count = active.length === groups.length ? `${groups.length} 组` : `${active.length}/${groups.length} 组`;
-    return `${count} · ${price(active)} 分/次`;
+    const groups = Object.keys(config).length;
+    const total = Object.values(config).reduce(
+        (sum, group) => sum + (typeof group.price === "number" ? group.price : 0),
+        0,
+    );
+    return `${groups} 组 · ${total} 分/次`;
 }

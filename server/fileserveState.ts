@@ -1,47 +1,32 @@
 /**
- * File-list push state per row — the grid badge's ground truth. There is no
- * separate push lane any more: the whole-row push carries the flagged groups
- * (per-group 推送 switches), and the digest baseline says whether what would
- * go out already matches the site.
+ * File-list work state per row — the grid badge's ground truth. The badge
+ * speaks the lane's language: what the netdisk pipelines can fill right now.
+ * Push timing is the row's own dirty flag and has no per-list badge.
  */
 
-import { fieldLabel, groupMissingField, normalizeConfig, pushableConfig } from "../shared/fileserve.js";
-import { configDigest } from "./digest.js";
+import { normalizeConfig, groupNetdisk, netdiskLabel } from "../shared/fileserve.js";
 import type { PostRow } from "./db.js";
 
 export interface FileServeState {
-    /** none = no file list; incomplete = a flagged group misses its required
-     * field; draft = groups exist but none is flagged (a push sends the empty
-     * config, which clears the online list — that is why this gets its own
-     * badge); ready = the flagged set differs from the site-confirmed digest;
-     * pushed = they match. */
-    status: "none" | "incomplete" | "draft" | "ready" | "pushed";
-    /** "组 #1 · 链接" style pointers for the incomplete groups. */
-    missing: string[];
+    /** unmounted = the row carries no file list; fillable = platform groups
+     * with empty links exist and the matching pipeline can fill them;
+     * complete = every group carries its link. */
+    status: "unmounted" | "fillable" | "complete";
+    /** The fillable groups, e.g. [{groupId: "2", label: "百度网盘"}]. */
+    items: { groupId: string; label: string }[];
 }
 
 export function fileServeState(row: PostRow): FileServeState {
     if (row.fileserve === null) {
-        return { status: "none", missing: [] };
+        return { status: "unmounted", items: [] };
     }
     const { config, errors } = normalizeConfig(row.fileserve);
     if (errors.length > 0 || Object.keys(config).length === 0) {
-        return { status: "none", missing: [] };
+        return { status: "unmounted", items: [] };
     }
-    const { config: effective, blocked } = pushableConfig(config);
-    if (blocked.length > 0) {
-        return {
-            status: "incomplete",
-            missing: blocked.map(({ id, field }) => `组 #${id} · ${fieldLabel(field)}`),
-        };
-    }
-    if (Object.keys(effective).length === 0) {
-        // Every group is a local draft: the next push sends the empty
-        // production config and clears the online list.
-        return { status: "draft", missing: [] };
-    }
-    if (row.fileservePushedDigest !== null && row.fileservePushedDigest === configDigest(effective)) {
-        return { status: "pushed", missing: [] };
-    }
-    return { status: "ready", missing: [] };
+    const items = Object.entries(config)
+        .filter(([, group]) => group.adapter === "platform")
+        .filter(([, group]) => typeof group.url !== "string" || group.url.trim() === "")
+        .map(([groupId, group]) => ({ groupId, label: netdiskLabel(groupNetdisk(group)) }));
+    return items.length > 0 ? { status: "fillable", items } : { status: "complete", items: [] };
 }

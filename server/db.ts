@@ -39,7 +39,6 @@ CREATE TABLE IF NOT EXISTS posts (
     modified_gmt TEXT NOT NULL DEFAULT '',
     fileserve TEXT,
     slug TEXT,
-    fileserve_pushed_digest TEXT,
     dirty INTEGER NOT NULL DEFAULT 0,
     conflict INTEGER NOT NULL DEFAULT 0,
     missing INTEGER NOT NULL DEFAULT 0,
@@ -66,14 +65,12 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 `);
 
-// Databases from before the digest baseline / slug capture lack these
-// columns; the guarded ALTERs are the whole migration.
+// Databases from before slug capture lack the column; the guarded ALTER is
+// the whole migration. (fileserve_pushed_digest was retired with the
+// per-group push-badge redesign; existing columns stay inert.)
 const postColumns = (db.pragma("table_info(posts)") as { name: string }[]).map((column) => column.name);
 if (!postColumns.includes("slug")) {
     db.exec("ALTER TABLE posts ADD COLUMN slug TEXT");
-}
-if (!postColumns.includes("fileserve_pushed_digest")) {
-    db.exec("ALTER TABLE posts ADD COLUMN fileserve_pushed_digest TEXT");
 }
 
 export function getSetting(key: string): string | null {
@@ -124,9 +121,6 @@ export interface PostRow {
     fileserve: string | null;
     /** The permalink's last segment, captured from sync/push responses. */
     slug: string | null;
-    /** Digest of the file list the site last confirmed — feeds the grid's
-     * 文件未推 / pushed badges. */
-    fileservePushedDigest: string | null;
     dirty: boolean;
     conflict: boolean;
     missing: boolean;
@@ -148,7 +142,6 @@ interface PostDbRow {
     modified_gmt: string;
     fileserve: string | null;
     slug: string | null;
-    fileserve_pushed_digest: string | null;
     dirty: number;
     conflict: number;
     missing: number;
@@ -171,7 +164,6 @@ function fromDb(row: PostDbRow): PostRow {
         modifiedGmt: row.modified_gmt,
         fileserve: row.fileserve,
         slug: row.slug,
-        fileservePushedDigest: row.fileserve_pushed_digest,
         dirty: row.dirty === 1,
         conflict: row.conflict === 1,
         missing: row.missing === 1,
@@ -183,7 +175,7 @@ function fromDb(row: PostDbRow): PostRow {
 }
 
 const POST_FIELDS = `local_id, post_id, status, title, content, author_id, date_local, date_gmt,
-    modified_gmt, fileserve, slug, fileserve_pushed_digest, dirty, conflict, missing, last_synced_gmt, last_pushed_gmt, last_error, snapshot`;
+    modified_gmt, fileserve, slug, dirty, conflict, missing, last_synced_gmt, last_pushed_gmt, last_error, snapshot`;
 
 export function listPosts(): PostRow[] {
     const rows = db.prepare(`SELECT ${POST_FIELDS} FROM posts ORDER BY local_id`).all() as PostDbRow[];
@@ -230,7 +222,6 @@ export interface PostPatch {
     modifiedGmt?: string;
     fileserve?: string | null;
     slug?: string | null;
-    fileservePushedDigest?: string | null;
     dirty?: boolean;
     conflict?: boolean;
     missing?: boolean;
@@ -251,7 +242,6 @@ const COLUMN_OF: Record<string, string> = {
     modifiedGmt: "modified_gmt",
     fileserve: "fileserve",
     slug: "slug",
-    fileservePushedDigest: "fileserve_pushed_digest",
     dirty: "dirty",
     conflict: "conflict",
     missing: "missing",

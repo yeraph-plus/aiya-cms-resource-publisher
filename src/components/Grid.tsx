@@ -92,14 +92,13 @@ function flagBadges(row: RowDTO): string[] {
     if (row.lastError) {
         badges.push("错误");
     }
-    if (row.fileServe.status === "ready") {
-        badges.push("文件未推");
+    const fs = row.fileServe;
+    if (fs.status === "unmounted" && row.postId !== null) {
+        badges.push("无文件挂载");
     }
-    if (row.fileServe.status === "incomplete") {
-        badges.push("文件缺项");
-    }
-    if (row.fileServe.status === "draft") {
-        badges.push("文件草稿");
+    if (fs.status === "fillable") {
+        const labels = [...new Set(fs.items.map((item) => item.label))].join("、");
+        badges.push(`可补：${labels}`);
     }
     return badges;
 }
@@ -134,7 +133,7 @@ export default function Grid({ rows, terms, authors, selectedId, onSelect, onEdi
                 // The error text itself rides on the badge's native tooltip —
                 // the wide error column it replaced is gone.
                 headerName: "标记",
-                width: 140,
+                width: 170,
                 valueGetter: (params) => flagBadges(params.data!).join(" "),
                 cellRenderer: (params: { data?: RowDTO }) => {
                     const data = params.data;
@@ -149,28 +148,26 @@ export default function Grid({ rows, terms, authors, selectedId, onSelect, onEdi
                                     title={
                                         badge === "错误"
                                             ? (data.lastError ?? undefined)
-                                            : badge === "文件缺项"
-                                              ? data.fileServe.missing.join("；")
-                                              : badge === "文件草稿"
-                                                ? "全部组为草稿：下一次推送会发送空配置，清空线上文件列表"
+                                            : badge === "无文件挂载"
+                                              ? "这一行还没有文件列表；在详情面板添加网盘数据组"
+                                              : badge.startsWith("可补")
+                                                ? data.fileServe.items.map((item) => `组 #${item.groupId} · ${item.label}`).join("；")
                                                 : undefined
                                     }
                                     className={`px-1 rounded text-[11px] ${
                                         badge === "错误"
                                             ? "bg-red-600 text-white"
-                                            : badge === "文件未推"
+                                            : badge.startsWith("可补")
                                               ? "bg-cyan-100 text-cyan-700"
-                                              : badge === "文件缺项"
-                                                ? "bg-amber-100 text-amber-700"
-                                                : badge === "文件草稿"
-                                                  ? "bg-neutral-200 text-neutral-600"
-                                                  : badge === "冲突"
-                                                    ? "bg-red-100 text-red-700"
-                                                    : badge === "待推送"
-                                                      ? "bg-amber-100 text-amber-700"
-                                                      : badge === "线上缺失"
-                                                        ? "bg-neutral-300 text-neutral-700"
-                                                        : "bg-blue-100 text-blue-700"
+                                              : badge === "无文件挂载"
+                                                ? "bg-neutral-200 text-neutral-600"
+                                                : badge === "冲突"
+                                                  ? "bg-red-100 text-red-700"
+                                                  : badge === "待推送"
+                                                    ? "bg-amber-100 text-amber-700"
+                                                    : badge === "线上缺失"
+                                                      ? "bg-neutral-300 text-neutral-700"
+                                                      : "bg-blue-100 text-blue-700"
                                     }`}
                                 >
                                     {badge}

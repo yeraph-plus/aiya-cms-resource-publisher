@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AIYA 网盘分享回填（百度）
 // @namespace    aiya-netdisk
-// @version      0.4.0
+// @version      0.5.0
 // @description  在百度网盘 web 端定位发帖器同名目录、创建分享并把链接回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
 // @match        https://pan.baidu.com/*
 // @grant        GM_xmlhttpRequest
@@ -205,6 +205,8 @@
     }
 
     // ---------- 单行处理 -----------------------------------------------------
+    const PIPELINE = "baidu"; // 本脚本所属管线；队列只认领 netdisk=baidu 的空链接组
+
     async function processItem(item) {
         setStatus(item, "run", "定位/创建目录…");
         const { entry, created } = await findFolder(item.dirName);
@@ -215,13 +217,13 @@
         await publisherFetch("/api/netdisk/result", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ localId: item.localId, groupId: item.groupId, url: link, code }),
+            body: JSON.stringify({ localId: item.localId, groupId: item.groupId, netdisk: PIPELINE, url: link, code }),
         });
         const periodText = cfg.period === "0" ? "永久" : `${cfg.period} 天`;
         setStatus(
             item,
             "done",
-            `已回填：${link}（提取码 ${code} · ${periodText}，已勾选推送）` +
+            `已回填：${link}（提取码 ${code} · ${periodText}）` +
                 (created ? "；客户端把文件传进该目录即可，分享实时可见" : ""),
         );
     }
@@ -370,7 +372,7 @@
     }
 
     function refreshQueue() {
-        return publisherFetch("/api/netdisk/queue")
+        return publisherFetch(`/api/netdisk/queue?netdisk=${encodeURIComponent(PIPELINE)}`)
             .then((data) => {
                 queue = data.queue.map((item) => ({ ...item }));
                 renderQueue();
