@@ -8,6 +8,7 @@ export interface SettingsDTO {
     defaultAuthorId: number | null;
     lastSyncCursor: string | null;
     workRoot: string;
+    dirNameSuffix: string;
 }
 
 export interface AuthorDTO {

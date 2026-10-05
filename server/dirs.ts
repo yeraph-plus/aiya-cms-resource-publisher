@@ -11,8 +11,8 @@
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { getPost, getSetting, logEvent } from "./db.js";
-import { stagingDirName, stagingId } from "../shared/staging-name.js";
+import { getPost, getSetting, getSettings, logEvent } from "./db.js";
+import { coerceDirNameSuffix, stagingDirName, stagingNameMatches } from "../shared/staging-name.js";
 
 export interface EnsureResult {
     status: "claimed" | "created" | "blocked";
@@ -25,19 +25,17 @@ function blocked(reason: string): EnsureResult {
     return { status: "blocked", dir: null, name: null, reason };
 }
 
-/** The existing folder carrying the post's padded id, or null. The id
- * segment must equal `{帖子ID}` exactly (5-digit zero-padded) or open with
- * `{帖子ID}-` — the dash delimiter keeps 00502 from claiming 005025's
- * folder. Sorted so a copied pair resolves deterministically. */
+/** The existing folder carrying the post's padded id, or null. The name must
+ * equal `{帖子ID}` exactly (6-digit zero-padded) or open with `{帖子ID}-` —
+ * the dash delimiter keeps 000500 from claiming 0005001's folder. Sorted so
+ * a copied pair resolves deterministically. */
 export function findStagingDir(postId: number): { dir: string; name: string } | null {
     const workRoot = (getSetting("workRoot") ?? "").trim();
     if (workRoot === "" || !existsSync(workRoot)) {
         return null;
     }
-    const id = stagingId(postId);
-    const prefix = `${id}-`;
     const match = readdirSync(workRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && (entry.name === id || entry.name.startsWith(prefix)))
+        .filter((entry) => entry.isDirectory() && stagingNameMatches(entry.name, postId))
         .map((entry) => entry.name)
         .sort()[0];
     return match ? { dir: join(workRoot, match), name: match } : null;
@@ -64,9 +62,9 @@ export function ensureStagingDir(localId: number): EnsureResult {
     if (workRoot === "") {
         if (!warnedRootMissing) {
             warnedRootMissing = true;
-            logEvent("warn", "目录", `#${row.postId} 需要本地目录，但「自动创建文件夹位置」还没配置（本次会话只提醒这一次）`, row.postId);
+            logEvent("warn", "目录", `#${row.postId} 需要本地目录，但「本地目录创建根」还没配置（本次会话只提醒这一次）`, row.postId);
         }
-        return blocked("先在设置里填好自动创建文件夹位置。");
+        return blocked("先在设置里填好本地目录创建根。");
     }
 
     const existing = findStagingDir(row.postId);
@@ -74,7 +72,11 @@ export function ensureStagingDir(localId: number): EnsureResult {
         return { status: "claimed", dir: existing.dir, name: existing.name };
     }
 
-    const name = stagingDirName(row.postId, row.title);
+    const name = stagingDirName(row.postId, {
+        title: row.title,
+        slug: row.slug,
+        suffix: coerceDirNameSuffix(getSettings().dirNameSuffix),
+    });
     const dir = join(workRoot, name);
     mkdirSync(dir, { recursive: true });
     logEvent("info", "目录", `#${row.postId} 已创建本地目录：${name}`, row.postId);

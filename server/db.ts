@@ -94,6 +94,8 @@ export interface SettingsShape {
     /** Root where local staging directories are created (纯本地辅助；网盘
      * lane 不读它); "" = unset. */
     workRoot: string;
+    /** What follows the padded post id in a staged folder's name. */
+    dirNameSuffix: string;
 }
 
 export function getSettings(): SettingsShape {
@@ -105,6 +107,7 @@ export function getSettings(): SettingsShape {
         defaultAuthorId: getSetting("defaultAuthorId") ? Number(getSetting("defaultAuthorId")) : null,
         lastSyncCursor: getSetting("lastSyncCursor"),
         workRoot: getSetting("workRoot") ?? "",
+        dirNameSuffix: getSetting("dirNameSuffix") ?? "title",
     };
 }
 

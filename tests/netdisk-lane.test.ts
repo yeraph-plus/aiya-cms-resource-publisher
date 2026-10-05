@@ -69,7 +69,7 @@ describe("netdisk queue", () => {
             postId: 502,
             groupId: "1",
             netdisk: "baidu",
-            dirName: "00502-测试 文章",
+            dirName: "000502-测试 文章",
             title: "测试 文章",
             groupTitle: "百度网盘",
         });

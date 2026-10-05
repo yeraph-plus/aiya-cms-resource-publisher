@@ -8,8 +8,8 @@
  */
 
 import { normalizeConfig, groupNetdisk, netdiskLabel, priceDefault } from "../shared/fileserve.js";
-import { stagingDirName } from "../shared/staging-name.js";
-import { getPost, listPosts, logEvent, updatePostRow, type PostRow } from "./db.js";
+import { coerceDirNameSuffix, stagingDirName } from "../shared/staging-name.js";
+import { getPost, getSettings, listPosts, logEvent, updatePostRow, type PostRow } from "./db.js";
 
 // --- 网盘目录命名 -----------------------------------------------------------
 // Folder names come from shared/staging-name.ts (post id padded + sanitized
@@ -33,6 +33,7 @@ export interface QueueItem {
  * group, so pipelines cannot clobber each other. Groups predating the
  * field default to baidu. */
 export function buildQueue(netdisk: string): QueueItem[] {
+    const suffix = coerceDirNameSuffix(getSettings().dirNameSuffix);
     const queue: QueueItem[] = [];
     for (const row of listPosts()) {
         if (row.postId === null || row.fileserve === null) {
@@ -55,7 +56,11 @@ export function buildQueue(netdisk: string): QueueItem[] {
                 postId: row.postId,
                 groupId: id,
                 netdisk: owner,
-                dirName: stagingDirName(row.postId, row.title),
+                dirName: stagingDirName(row.postId, {
+                    title: row.title,
+                    slug: row.slug,
+                    suffix,
+                }),
                 title: row.title,
                 groupTitle: typeof group.title === "string" && group.title !== "" ? group.title : netdiskLabel(owner),
                 price: typeof group.price === "number" ? group.price : priceDefault("platform"),

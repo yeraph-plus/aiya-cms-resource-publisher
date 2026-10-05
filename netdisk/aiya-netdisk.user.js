@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AIYA 网盘分享回填（百度）
 // @namespace    aiya-netdisk
-// @version      0.5.0
+// @version      0.5.1
 // @description  在百度网盘 web 端定位发帖器同名目录、创建分享并把链接回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
 // @match        https://pan.baidu.com/*
 // @grant        GM_xmlhttpRequest
@@ -110,8 +110,10 @@
     /** The staged folder under the configured root: listed first (covers the
      * uploaded-already case), created when missing — the share is a live view
      * of the folder, so files the client uploads afterwards simply appear in
-     * it. */
+     * it. Identification is the 6-digit padded id exactly. */
     async function findFolder(dirName) {
+        const id = dirName.split("-")[0];
+        const matchName = (name) => name === id || name.startsWith(`${id}-`);
         for (let page = 1; ; page += 1) {
             const result = await apiJson("/api/list", {
                 params: {
@@ -130,8 +132,7 @@
             }
             const entries = result.list ?? result.data ?? [];
             const hit = entries.find(
-                (entry) => (Number(entry.isdir) === 1 || entry.isdir === "1") &&
-                    (entry.server_filename === dirName || entry.server_filename?.startsWith(`${dirName}-`)),
+                (entry) => (Number(entry.isdir) === 1 || entry.isdir === "1") && matchName(entry.server_filename ?? ""),
             );
             if (hit) {
                 return { entry: hit, created: false };

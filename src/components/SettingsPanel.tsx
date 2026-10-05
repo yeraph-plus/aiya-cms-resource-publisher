@@ -15,6 +15,7 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
     const [proxyUrl, setProxyUrl] = useState(state.settings.proxyUrl);
     const [defaultAuthorId, setDefaultAuthorId] = useState<number | null>(state.settings.defaultAuthorId);
     const [workRoot, setWorkRoot] = useState(state.settings.workRoot);
+    const [dirNameSuffix, setDirNameSuffix] = useState(state.settings.dirNameSuffix);
     const [busy, setBusy] = useState(false);
 
     useEffect(() => {
@@ -34,6 +35,7 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
         proxyUrl,
         defaultAuthorId,
         workRoot,
+        dirNameSuffix,
     });
 
     const save = async () => {
@@ -124,12 +126,19 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
                         ))}
                     </select>
 
-                    <label className="text-right text-neutral-500">本地暂存目录位置</label>
+                    <label className="text-right text-neutral-500">本地目录创建根</label>
                     <input
                         value={workRoot}
                         onChange={(event) => setWorkRoot(event.target.value)}
-                        placeholder="可选的本地暂存根位置，如 D:\\网盘发布（可空 = 不自动创建；网盘回填不依赖它）"
+                        placeholder="本地目录辅助的根位置，如 D:\\网盘发布（可空 = 不自动创建；网盘回填不依赖它）"
                     />
+
+                    <label className="text-right text-neutral-500">目录命名</label>
+                    <select value={dirNameSuffix} onChange={(event) => setDirNameSuffix(event.target.value)}>
+                        <option value="slug">ID-SLUG</option>
+                        <option value="title">ID-标题</option>
+                        <option value="none">仅 ID</option>
+                    </select>
                 </div>
 
                 <div className="px-5 pb-5">

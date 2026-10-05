@@ -88,6 +88,7 @@ function errorMessage(error: unknown): string {
                     defaultAuthorId: settings.defaultAuthorId,
                     lastSyncCursor: settings.lastSyncCursor,
                     workRoot: settings.workRoot,
+                    dirNameSuffix: settings.dirNameSuffix,
                 },
                 authors: listAuthors(),
                 terms,
@@ -114,6 +115,13 @@ function errorMessage(error: unknown): string {
         }
         if (body.workRoot !== undefined) {
             setSetting("workRoot", String(body.workRoot ?? "").trim());
+        }
+        if (body.dirNameSuffix !== undefined) {
+            const suffix = String(body.dirNameSuffix);
+            if (!["slug", "title", "none"].includes(suffix)) {
+                return reply.code(400).send({ error: "目录命名后缀无效。" });
+            }
+            setSetting("dirNameSuffix", suffix);
         }
         return reply.code(200).send({ ok: true });
     });

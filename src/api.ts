@@ -57,6 +57,7 @@ export interface SaveSettingsPayload {
     proxyUrl?: string;
     defaultAuthorId?: number | null;
     workRoot?: string;
+    dirNameSuffix?: string;
 }
 
 export function saveSettings(payload: SaveSettingsPayload): Promise<{ ok: boolean }> {
