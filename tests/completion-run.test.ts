@@ -114,14 +114,18 @@ describe("the netdisk field in the whole-row push", () => {
         expect(stored["2"].netdisk).toBe("quark");
     });
 
-    it("empty links go out as-is; the sync keeps the ownership fields", async () => {
+    it("empty-link groups stay local across pushes and syncs; filled ones follow the site", async () => {
         const localId = db.insertPost({ status: "publish", title: "行", postId: 802 });
         await app.inject({
             method: "PUT",
             url: `/api/posts/${localId}`,
             payload: { fileserve: { "1": platformGroup("", "baidu") } },
         });
+        // A clean row takes the merge path (dirty rows keep their lists).
+        db.updatePostRow(localId, { dirty: false });
 
+        // A push of a row whose only group is empty carries no fileserve at
+        // all, and the pending group survives the write-back.
         vi.mocked(wp.ping).mockResolvedValue({
             user: { id: 1, login: "u", name: "U" },
             caps: { editPosts: true, publishPosts: true, editOthersPosts: true },
@@ -131,7 +135,7 @@ describe("the netdisk field in the whole-row push", () => {
         vi.mocked(wp.users).mockResolvedValue([]);
         vi.mocked(wp.taxonomies).mockResolvedValue([]);
         vi.mocked(wp.listResources).mockResolvedValue({
-            items: [item(802, { fileserve: { "1": platformGroup("") } })],
+            items: [item(802, { fileserve: null })],
             total: 1,
         });
         const sync = await app.inject({ method: "POST", url: "/api/sync", payload: {} });
@@ -143,6 +147,39 @@ describe("the netdisk field in the whole-row push", () => {
         const row = state.json().posts.find((p: { localId: number }) => p.localId === localId);
         expect(row.fileServe.status).toBe("fillable");
         expect(row.fileServe.items).toEqual([{ groupId: "1", label: "百度网盘" }]);
+    });
+
+    it("a filled group deleted on the site propagates on sync; pending ones survive", async () => {
+        const localId = db.insertPost({ status: "publish", title: "行", postId: 805 });
+        await app.inject({
+            method: "PUT",
+            url: `/api/posts/${localId}`,
+            payload: {
+                fileserve: {
+                    "1": platformGroup("https://pan.baidu.com/s/live", "baidu"),
+                    "2": platformGroup("", "baidu"),
+                },
+            },
+        });
+        db.updatePostRow(localId, { dirty: false });
+
+        // The site dropped the filled group; the pending empty one remains.
+        vi.mocked(wp.ping).mockResolvedValue({
+            user: { id: 1, login: "u", name: "U" },
+            caps: { editPosts: true, publishPosts: true, editOthersPosts: true },
+            resourceAvailable: true,
+            version: "0.1.1-test",
+        });
+        vi.mocked(wp.users).mockResolvedValue([]);
+        vi.mocked(wp.taxonomies).mockResolvedValue([]);
+        vi.mocked(wp.listResources).mockResolvedValue({ items: [item(805, { fileserve: null })], total: 1 });
+        const sync = await app.inject({ method: "POST", url: "/api/sync", payload: {} });
+        expect(sync.json().ok).toBe(true);
+
+        const stored = JSON.parse(db.getPost(localId)!.fileserve!);
+        expect(Object.keys(stored)).toEqual(["2"]);
+        expect(stored["2"].url).toBe("");
+        expect(stored["2"].netdisk).toBe("baidu");
     });
 
     it("fills all groups regardless of tags; a filled list reads complete", async () => {

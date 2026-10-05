@@ -128,8 +128,9 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
             continue;
         }
 
-        // The whole config rides with the row push, empty links included —
-        // the local netdisk field is stripped (the site drops it anyway).
+        // The payload carries only groups with links; empty-link groups stay
+        // local (the lane's pending work), and the local netdisk field is
+        // stripped (the site drops it anyway).
         let fileserveValue: string | null = row.fileserve;
         if (row.fileserve !== null) {
             fileserveValue = JSON.stringify(productionConfig(config));

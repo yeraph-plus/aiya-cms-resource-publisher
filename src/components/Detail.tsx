@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { RowDTO, StateDTO } from "../types";
 import { TAXONOMY_LABELS, TAXONOMY_ORDER } from "../types";
 import { ensureStagingDir, fetchStagingDir, openStagingDir, saveRow, type RowPatch } from "../api";

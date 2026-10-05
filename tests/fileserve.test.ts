@@ -138,19 +138,33 @@ describe("fileserve model", () => {
         expect(config["3"]?.netdisk).toBe("quark");
     });
 
-    it("strips the netdisk field for the production payload and re-attaches it on merge", () => {
+    it("strips the netdisk field and keeps only link-carrying groups for the payload", () => {
         const { config } = normalizeConfig({
             "1": { adapter: "platform", url: "https://x", netdisk: "baidu" },
-            "2": { adapter: "openlist_list", path: "/d" },
+            "2": { adapter: "platform", url: "", netdisk: "baidu" },
+            "3": { adapter: "openlist_list", path: "/d" },
         });
         expect(productionConfig(config)).toEqual({
             "1": { adapter: "platform", url: "https://x", code: "", title: "", price: 0 },
-            "2": { adapter: "openlist_list", path: "/d", password: "", per_page: 0, title: "", price: 0 },
+            "3": { adapter: "openlist_list", path: "/d", password: "", per_page: 0, title: "", price: 0 },
         });
 
         // The site echo carries no ownership; the merge re-attaches it.
         const merged = JSON.parse(mergeRemoteFileserve(productionConfig(config), JSON.stringify(config))!);
         expect(merged["1"].netdisk).toBe("baidu");
-        expect(merged["2"].netdisk).toBeUndefined();
+        expect(merged["2"].netdisk).toBe("baidu");
+        expect(merged["2"].url).toBe("");
+        expect(merged["3"].netdisk).toBeUndefined();
+    });
+
+    it("a filled group missing from the site propagates its deletion on merge", () => {
+        const local = JSON.stringify({
+            "1": { adapter: "platform", url: "https://x", code: "", title: "", price: 0, netdisk: "baidu" },
+            "2": { adapter: "platform", url: "", code: "", title: "", price: 0, netdisk: "baidu" },
+        });
+        // The site carries neither group: the filled one was deleted there
+        // (deletion propagates), the empty one is pending lane work (stays).
+        const merged = JSON.parse(mergeRemoteFileserve(null, local)!);
+        expect(Object.keys(merged)).toEqual(["2"]);
     });
 });

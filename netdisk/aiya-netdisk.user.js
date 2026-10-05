@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AIYA 网盘分享回填（百度）
 // @namespace    aiya-netdisk
-// @version      0.5.1
+// @version      0.5.2
 // @description  在百度网盘 web 端定位发帖器同名目录、创建分享并把链接回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
 // @match        https://pan.baidu.com/*
 // @grant        GM_xmlhttpRequest
@@ -131,9 +131,18 @@
                 throw new Error(`列目录失败（errno=${result?.errno}）——登录态可能失效或根目录不存在`);
             }
             const entries = result.list ?? result.data ?? [];
-            const hit = entries.find(
-                (entry) => (Number(entry.isdir) === 1 || entry.isdir === "1") && matchName(entry.server_filename ?? ""),
-            );
+            const candidates = entries
+                .filter((entry) => (Number(entry.isdir) === 1 || entry.isdir === "1") && matchName(entry.server_filename ?? ""))
+                // Deterministic when several same-id folders exist (manual
+                // copies): an exact dirName wins, then alphabetical order.
+                .sort((a, b) => {
+                    const an = a.server_filename ?? "";
+                    const bn = b.server_filename ?? "";
+                    if (an === dirName) return -1;
+                    if (bn === dirName) return 1;
+                    return an.localeCompare(bn);
+                });
+            const hit = candidates[0];
             if (hit) {
                 return { entry: hit, created: false };
             }

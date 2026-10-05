@@ -205,22 +205,28 @@ export function emptyGroup(adapter: string): FileGroup {
     return group;
 }
 
-/** The production payload for a row: every group with the local netdisk
- * field stripped — the whole config always rides with the row push, empty
- * links included (the lane fills them in a later pass). */
+/** The production payload for a row: every group that carries its link, with
+ * the local netdisk field stripped. Empty-link platform groups stay local —
+ * they are the netdisk pipeline's pending work items, not publishable
+ * entries — so a pushed row never carries a dead download entry. */
 export function productionConfig(config: FileServeConfig): FileServeConfig {
     const effective: FileServeConfig = {};
     for (const [id, group] of Object.entries(config)) {
+        if (group.adapter === "platform" && (typeof group.url !== "string" || group.url.trim() === "")) {
+            continue;
+        }
         const { netdisk, ...production } = group;
         effective[id] = production as FileGroup;
     }
     return effective;
 }
 
-/** The local file list after a site confirmation: the site's production
- * config is authoritative for what it carries, while each surviving group
- * gets its local netdisk field re-attached (the site dropped it) and local
- * groups the site does not know about ride along untouched. */
+/** The local file list after a site confirmation. The site is authoritative
+ * for what it carries (each surviving group gets its local netdisk field
+ * re-attached — the site dropped it), and a local group the site does not
+ * know survives only while its link is still empty: those are the
+ * pipeline's pending work items. A filled group missing from the site was
+ * deleted there, and that deletion propagates. */
 export function mergeRemoteFileserve(remote: unknown, localRaw: string | null): string | null {
     const remoteConfig =
         remote !== null && typeof remote === "object" && !Array.isArray(remote) ? (remote as FileServeConfig) : null;
@@ -234,7 +240,7 @@ export function mergeRemoteFileserve(remote: unknown, localRaw: string | null): 
         } as FileGroup;
     }
     for (const [id, group] of Object.entries(local)) {
-        if (merged[id] === undefined) {
+        if (merged[id] === undefined && group.adapter === "platform" && (typeof group.url !== "string" || group.url.trim() === "")) {
             merged[id] = { ...group };
         }
     }
