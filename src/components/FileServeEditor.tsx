@@ -111,6 +111,25 @@ export default function FileServeEditor({ config, onChange, onGroupAdded }: Prop
                                 删除组
                             </button>
                         </div>
+                        {/* The owning pipeline on its own top row: it decides
+                            which netdisk script claims the group, and the
+                            title follows it. */}
+                        {group.adapter === "platform" && (
+                            <div className="flex items-center gap-3 mb-1.5">
+                                <span className="lbl">网盘</span>
+                                {NETDISK_OPTIONS.map((option) => (
+                                    <label key={option.id} className="inline-flex items-center gap-1 cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name={`aiya-netdisk-${id}`}
+                                            checked={group.netdisk === undefined ? option.id === "baidu" : group.netdisk === option.id}
+                                            onChange={() => changeNetdisk(id, option.id)}
+                                        />
+                                        <span>{option.label}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        )}
                         <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
                             {fields.map((field) => {
                                 const wide =
@@ -138,27 +157,6 @@ export default function FileServeEditor({ config, onChange, onGroupAdded }: Prop
                                     </label>
                                 );
                             })}
-                            {/* The owning pipeline, styled as one more field
-                                cell: it decides which netdisk script claims
-                                the group, and the title follows it. */}
-                            {group.adapter === "platform" && (
-                                <div className="block">
-                                    <span className="lbl">网盘</span>
-                                    <div className="flex gap-3 mt-0.5">
-                                        {NETDISK_OPTIONS.map((option) => (
-                                            <label key={option.id} className="inline-flex items-center gap-1 cursor-pointer">
-                                                <input
-                                                    type="radio"
-                                                    name={`aiya-netdisk-${id}`}
-                                                    checked={group.netdisk === undefined ? option.id === "baidu" : group.netdisk === option.id}
-                                                    onChange={() => changeNetdisk(id, option.id)}
-                                                />
-                                                <span>{option.label}</span>
-                                            </label>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
                         </div>
                     </div>
                 );
