@@ -1,0 +1,33 @@
+name: CI
+
+# The publisher is a local desktop tool, but its type-checks and unit suite
+# are the only thing standing between a refactor and a broken main. Node 24
+# is pinned because better-sqlite3 ships a NODE_MODULE_VERSION 137 binary
+# (Node 24 ABI); an older Node fails to load the native module.
+
+on:
+    push:
+    pull_request:
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Set up Node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "24"
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Type-check both configs
+              run: npm run check
+
+            - name: Run the unit suite
+              run: npm test

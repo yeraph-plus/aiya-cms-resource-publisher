@@ -21,7 +21,7 @@ npm run build && npm start   # 单进程 http://localhost:5175
 npm run app:win    # vite build + 服务端 esbuild bundle + 切换 electron ABI + electron-builder → release/ + 还原 node ABI
 ```
 
-产物在 `release/`：NSIS 安装包（`AIYA发帖器 Setup <版本>.exe`）+ 便携版（`AIYA发帖器 <版本>.exe`）。**better-sqlite3 的双 ABI 由 `scripts/native-sync.mjs` 自动切换**（`.native/{node,electron}/better_sqlite3.node` 两份归档，node_modules 常态保持 Node ABI 供 vitest/tsx，打包窗口期临时换 Electron ABI）；下载 URL 由 `scripts/build-app.mjs` 钉死，保证缓存键稳定命中。首次打包要点：
+产物在 `release/`：NSIS 安装包（`AIYA发帖器 Setup <版本>.exe`）+ 便携版（`AIYA发帖器 <版本>.exe`）。**better-sqlite3 的双 ABI 由 `scripts/native-sync.mjs` 自动切换**（`.native/{node,electron}/better_sqlite3.node` 两份归档，node_modules 常态保持 Node ABI 供 vitest/tsx，打包窗口期临时换 Electron ABI）；下载 URL 由 `scripts/build-app.mjs` 钉死，保证缓存键稳定命中。整条打包链由 `scripts/app-build.mjs` 托管：**无论成功、失败还是中断，收尾时都会还原 Node ABI**（`finally` 语义），因此一次失败的 electron-builder（工具集拉不到、磁盘不足、Ctrl+C）不会把 `node_modules` 留在 Electron ABI 上而让后续 `npm test` 报 `NODE_MODULE_VERSION` 不匹配。若仍怀疑 ABI 状态，手工跑一次 `npm run native:node` 即可。首次打包要点：
 
 - 服务端用 esbuild 打成单文件 `dist-server/index.js`（CJS 依赖需 `--banner:js` 注入 `createRequire`；`better-sqlite3` 保持 external），Electron 主进程 `electron/main.mjs` 启动它（随机本地端口）并开窗口加载；数据库落在 `%APPDATA%/aiya-publisher/data/publisher.db`。
 - **electron 版本必须精确钉死**（`42.11.8`，范围值会让 electron-builder 拒绝工作），且 `npmRebuild: false`——本机没有 MSVC 工具链，better-sqlite3 用 **Electron ABI 的 prebuild**：进入 `node_modules/better-sqlite3` 执行 `npx prebuild-install --runtime electron --target <electron版本>`，GitHub 不通时从 npmmirror 手动取 `https://registry.npmmirror.com/-/binary/better-sqlite3/v<版本>/better-sqlite3-v<版本>-electron-v<ABI>-win32-x64.tar.gz` 解到包根（ABI 映射用 node-abi 查：electron 42 → 146；升级 electron 主版本必须重取对应 ABI）。

@@ -104,7 +104,21 @@ export function sanitizeId(raw: string): string {
     return raw.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 16);
 }
 
-/** Loose stand-in for PHP's sanitize_text_field: no tags, collapsed blank edges. */
+/**
+ * Loose stand-in for PHP's `sanitize_text_field`. The back end is the
+ * authority for what lands in the option, so this only has to keep the
+ * field's own "did it change?" compare honest. Two differences are known
+ * and deliberate — never treat this output as the stored value:
+ *
+ * - inner whitespace is NOT collapsed (`A   B` survives here, the PHP side
+ *   stores `A B`) — only the edges are trimmed;
+ * - percent-octets are NOT stripped (`%20` survives here, the PHP side
+ *   drops it).
+ *
+ * Both differences can only make a locally-normalized value look *changed*
+ * when the back end would have normalized it away, so a redundant save is
+ * possible; a wrong stored value is not.
+ */
 function sanitizeText(value: string): string {
     return value.replace(/<[^>]*>/g, "").trim();
 }
