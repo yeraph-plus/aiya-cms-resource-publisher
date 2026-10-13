@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: AIYA CMS - Resource Publisher API
- * Description: REST API (aiya-publish/v1) for an external publishing tool to create and update resource posts, including the FileServe data field. Application password required; anonymous callers are rejected. Companion plugin of the local publisher tool — requires the AIYA CMS - Headless Core plugin, which registers the resource post type this API serves.
- * Version: 0.1.1
+ * Description: REST API (aiya-publish/v1) for an external publishing tool to create and update resource posts, including the FileServe data field and pic-bed image uploads. Application password required; anonymous callers are rejected. Companion plugin of the local publisher tool — requires the AIYA CMS - Headless Core plugin, which registers the resource post type this API serves.
+ * Version: 0.2.0
  * Requires at least: 6.5
  * Requires PHP: 8.5
  * Author: Yeraph
@@ -17,7 +17,7 @@ namespace Aiya\Publish;
 
 defined('ABSPATH') || exit;
 
-define('AIYA_PUBLISH_VERSION', '0.1.1');
+define('AIYA_PUBLISH_VERSION', '0.2.0');
 define('AIYA_PUBLISH_FILE', __FILE__);
 define('AIYA_PUBLISH_PATH', __DIR__ . '/');
 
@@ -58,6 +58,7 @@ add_action('rest_api_init', static function (): void {
     }
 
     (new Rest\ResourceController())->registerRoutes();
+    (new Rest\UploadsController())->registerRoutes();
 
     // The headless gate trims every namespace it does not know for callers
     // without publish_posts — announce ours so publisher sessions are

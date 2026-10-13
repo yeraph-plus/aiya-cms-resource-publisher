@@ -74,6 +74,47 @@ export type ApplyResultOutcome =
     | { ok: true; row: PostRow }
     | { ok: false; error: string };
 
+// --- 回填通知 ---------------------------------------------------------------
+// The script writes the file list straight into the database, so a client that
+// is already open never hears about it: its cached row still shows the link as
+// empty, its 标记 column still says 可补, and — the damaging part — the row's
+// detail panel keeps a draft taken before the fill, so the next save of *any*
+// field would put that empty draft back and destroy the link. Every applied
+// result therefore lands in a small in-memory ring that an open client polls.
+// The sequence restarts with the process, which costs nothing: a client that
+// starts later reads the whole state anyway.
+
+const APPLIED_KEEP = 200;
+let appliedSeq = 0;
+const appliedRing: { seq: number; localId: number }[] = [];
+
+export function noteApplied(localId: number): void {
+    appliedSeq += 1;
+    appliedRing.push({ seq: appliedSeq, localId });
+    if (appliedRing.length > APPLIED_KEEP) {
+        appliedRing.splice(0, appliedRing.length - APPLIED_KEEP);
+    }
+}
+
+export interface AppliedResults {
+    cursor: number;
+    localIds: number[];
+}
+
+/**
+ * The rows filled since `after`. The cursor is the ring's high-water mark
+ * rather than the newest id actually returned: a caller further behind than
+ * the ring must not be fed rows the ring already dropped, and must not be left
+ * stuck just below the mark on every poll.
+ */
+export function appliedSince(after: number): AppliedResults {
+    const entries = appliedRing.filter((entry) => entry.seq > after);
+    return {
+        cursor: appliedSeq,
+        localIds: [...new Set(entries.map((entry) => entry.localId))],
+    };
+}
+
 /**
  * Fill one group's share link and mark the row dirty. The group's netdisk
  * field must match the calling pipeline (an untagged group counts as baidu),
@@ -120,6 +161,7 @@ export function applyResult(netdisk: string, localId: number, groupId: string, u
         fileserve: JSON.stringify(config),
         dirty: true,
     });
+    noteApplied(localId);
     logEvent("info", "网盘", `#${row.postId} ${row.title}：组 #${groupId}（${netdiskLabel(owner)}）分享已回填`, row.postId ?? undefined);
     return { ok: true, row: getPost(localId)! };
 }

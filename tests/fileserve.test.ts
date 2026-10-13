@@ -3,6 +3,7 @@ import {
     ADAPTER_FIELDS,
     configSummary,
     emptyGroup,
+    mergeFileserveDraft,
     mergeRemoteFileserve,
     nextId,
     normalizeConfig,
@@ -10,6 +11,62 @@ import {
     productionConfig,
     sanitizeId,
 } from "../shared/fileserve.js";
+
+/**
+ * The netdisk lane fills links from another window, so a detail panel can hold
+ * a draft taken before that fill. The merge decides per group which side wins.
+ */
+describe("fileserve draft merge", () => {
+    const group = (url: string, netdisk = "baidu") => ({ adapter: "platform", url, code: "", title: "百度网盘", price: 0, netdisk });
+    const stored = (config: Record<string, unknown>) => JSON.stringify(config);
+
+    it("lets the fill win over the stale draft's empty link", () => {
+        const base = stored({ "1": group("") });
+        const filled = { "1": group("https://pan.baidu.com/s/x?pwd=a9k2") };
+        const patch = normalizeConfig({ "1": group("") }).config;
+
+        const merged = mergeFileserveDraft(JSON.parse(base), patch, filled);
+        expect(merged.moved).toBe(true);
+        expect(merged.config["1"]!.url).toBe("https://pan.baidu.com/s/x?pwd=a9k2");
+    });
+
+    it("still lands a group the user added in that same stale draft", () => {
+        const base = stored({ "1": group("") });
+        const filled = { "1": group("https://pan.baidu.com/s/x?pwd=a9k2") };
+        const patch = normalizeConfig({ "1": group(""), "2": group("", "quark") }).config;
+
+        const merged = mergeFileserveDraft(JSON.parse(base), patch, filled);
+        expect(merged.moved).toBe(true);
+        expect(merged.config["1"]!.url).toBe("https://pan.baidu.com/s/x?pwd=a9k2");
+        expect(merged.config["2"]!.netdisk).toBe("quark");
+    });
+
+    it("writes the draft through when nothing moved in the store", () => {
+        const base = stored({ "1": group("") });
+        const patch = normalizeConfig({ "1": group("https://pan.example/s/mine", "quark") }).config;
+
+        const merged = mergeFileserveDraft(JSON.parse(base), patch, JSON.parse(base));
+        expect(merged.moved).toBe(false);
+        expect(merged.config["1"]!.url).toBe("https://pan.example/s/mine");
+        expect(merged.config["1"]!.netdisk).toBe("quark");
+    });
+
+    it("honours a deliberate clear, and a deletion the store did not touch", () => {
+        const base = stored({ "1": group(""), "2": group("") });
+        // The panel dropped group 2; neither group moved in the store.
+        const patch = normalizeConfig({ "1": group("") }).config;
+        const merged = mergeFileserveDraft(JSON.parse(base), patch, JSON.parse(base));
+        expect(Object.keys(merged.config)).toEqual(["1"]);
+        expect(merged.moved).toBe(false);
+    });
+
+    it("reads a missing base as 'nothing known', so the patch stands", () => {
+        const patch = normalizeConfig({ "1": group("") }).config;
+        const merged = mergeFileserveDraft(null, patch, null);
+        expect(merged.moved).toBe(false);
+        expect(Object.keys(merged.config)).toEqual(["1"]);
+    });
+});
 
 describe("fileserve model", () => {
     it("normalizes the canonical sample the aiya-core tests use", () => {

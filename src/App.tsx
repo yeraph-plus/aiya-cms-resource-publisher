@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api";
-import type { StateDTO } from "./types";
+import type { RowDTO, StateDTO } from "./types";
 import Grid from "./components/Grid";
 import Detail from "./components/Detail";
 import SettingsPanel from "./components/SettingsPanel";
@@ -17,6 +17,8 @@ interface Toast {
 export default function App() {
     const [state, setState] = useState<StateDTO | null>(null);
     const [selectedId, setSelectedId] = useState<number | null>(null);
+    // Set right after 新建行 so the grid can scroll the new last row into view.
+    const [scrollToId, setScrollToId] = useState<number | null>(null);
     const [filter, setFilter] = useState<Filter>("all");
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [importOpen, setImportOpen] = useState(false);
@@ -28,6 +30,12 @@ export default function App() {
     const [logTick, setLogTick] = useState(0);
     // Progress of the running pull/push, polled while busy; null when idle.
     const [progress, setProgress] = useState<api.ProgressDTO | null>(null);
+    // localIds whose pending detail-panel draft must be thrown away instead of
+    // flushed on unmount. 还原 and 删除 both discard the panel's edits, and the
+    // panel's unmount flush would otherwise write the discarded draft back over
+    // the result. A ref, not state: the unmounting instance reads it during its
+    // own cleanup, before any re-render could hand it a fresh prop.
+    const discardFlush = useRef<Set<number>>(new Set());
     // Right panel width, persisted across sessions; draggable via the divider.
     const [detailWidth, setDetailWidth] = useState<number>(() => {
         const stored = Number(window.localStorage.getItem("publisher.detailWidth"));
@@ -75,9 +83,72 @@ export default function App() {
         }
     }, [notify]);
 
+    /**
+     * Replaces a single row in the loaded state, appending it when the row is
+     * new. Editing a row touches exactly one row, so a save must not pull the
+     * whole table back: a full refresh rebuilt every row object, rebuilt the
+     * grid's columnDefs (terms/authors arrive as fresh objects) and pushed the
+     * server's copy of the row into the detail panel mid-typing. The list is
+     * only refetched by the operations that really do move many rows — 拉取,
+     * 设置保存, CSV 导入.
+     */
+    const applyRow = useCallback((row: RowDTO) => {
+        setState((previous) => {
+            if (!previous) {
+                return previous;
+            }
+            const known = previous.posts.some((item) => item.localId === row.localId);
+            return {
+                ...previous,
+                // Appended at the end: the server orders by local_id, so a
+                // brand-new row is the last one there too.
+                posts: known
+                    ? previous.posts.map((item) => (item.localId === row.localId ? row : item))
+                    : [...previous.posts, row],
+            };
+        });
+    }, []);
+
+    /** Drops one row locally; nothing else in the table moves. */
+    const removeRow = useCallback((localId: number) => {
+        setState((previous) =>
+            previous ? { ...previous, posts: previous.posts.filter((item) => item.localId !== localId) } : previous,
+        );
+    }, []);
+
     useEffect(() => {
         void refresh();
     }, [refresh]);
+
+    // The netdisk userscript writes share links into the database from the
+    // pan.baidu.com page. Nothing in this tab hears about that on its own, so
+    // the row kept showing an empty link and a stale 可补 badge — and the detail
+    // panel's next save would put its pre-fill draft back over the link. Poll
+    // the lane's tiny cursor and splice whatever it reports.
+    useEffect(() => {
+        let alive = true;
+        let cursor = 0;
+        const timer = setInterval(() => {
+            void (async () => {
+                try {
+                    const applied = await api.fetchNetdiskApplied(cursor);
+                    cursor = applied.cursor;
+                    if (!alive) {
+                        return;
+                    }
+                    for (const row of applied.rows) {
+                        applyRow(row);
+                    }
+                } catch {
+                    // Transient — the server may be restarting; the next tick retries.
+                }
+            })();
+        }, 2000);
+        return () => {
+            alive = false;
+            clearInterval(timer);
+        };
+    }, [applyRow]);
 
     const withBusy = useCallback(
         async (task: () => Promise<void>) => {
@@ -153,36 +224,56 @@ export default function App() {
 
     const onNew = () =>
         withBusy(async () => {
-            const localId = await api.createRow();
-            await refresh();
-            setSelectedId(localId);
+            const row = await api.createRow();
+            applyRow(row);
+            setSelectedId(row.localId);
+            setScrollToId(row.localId);
         });
 
     const onDelete = (localId: number) =>
         withBusy(async () => {
+            discardFlush.current.add(localId);
             await api.deleteRow(localId);
             if (selectedId === localId) {
                 setSelectedId(null);
             }
+            removeRow(localId);
             notify("ok", "已删除本地行（线上帖子不受影响）");
-            await refresh();
         });
 
     const onRevert = (localId: number) =>
         withBusy(async () => {
+            discardFlush.current.add(localId);
             try {
-                await api.revertRow(localId);
+                const row = await api.revertRow(localId);
+                if (row) {
+                    applyRow(row);
+                }
                 setRevision((r) => r + 1);
                 notify("ok", "已还原到最近一次确认的状态");
             } catch (error) {
+                discardFlush.current.delete(localId);
                 notify("err", String(error));
             }
-            await refresh();
         });
 
-    const onSaved = useCallback(() => {
-        void refresh();
-    }, [refresh]);
+    /** A grid cell edit: only this row changes, so neither the busy flag nor a
+     * full list refetch is warranted. The reload on failure is the exception —
+     * the grid already shows the typed value, so a rejected save has to be
+     * rolled back from the server's truth. */
+    const onGridEdit = useCallback(
+        (localId: number, patch: api.RowPatch) => {
+            void (async () => {
+                try {
+                    applyRow((await api.saveRow(localId, patch)).row);
+                } catch (error) {
+                    notify("err", String(error));
+                    await refresh();
+                }
+            })();
+        },
+        [applyRow, notify, refresh],
+    );
 
     // Hooks must run on every render: state is null until the first
     // /api/state round-trip, so the loading branch has to come after them.
@@ -327,17 +418,9 @@ export default function App() {
                         terms={state.terms}
                         authors={state.authors}
                         selectedId={selectedId}
+                        scrollToId={scrollToId}
                         onSelect={setSelectedId}
-                        onEdit={(localId, patch) => {
-                            void withBusy(async () => {
-                                try {
-                                    await api.saveRow(localId, patch);
-                                    await refresh();
-                                } catch (error) {
-                                    notify("err", String(error));
-                                }
-                            });
-                        }}
+                        onEdit={onGridEdit}
                     />
                 </div>
                 <div
@@ -358,7 +441,8 @@ export default function App() {
                                 row={selected}
                                 state={state}
                                 busy={busy}
-                                onEdit={onSaved}
+                                onEdit={applyRow}
+                                discardFlush={discardFlush}
                                 notify={notify}
                             />
                         </div>

@@ -361,3 +361,58 @@ function post_type_exists(string $type): bool
 {
     return $type === 'resource';
 }
+
+/*
+ * REST shims: just enough for a route class to register and answer
+ * without a WordPress request cycle — the route table, a request that
+ * carries file params, and a response that keeps its data for
+ * assertions. The capability and identity helpers above are the real
+ * gate for permission_callback tests.
+ */
+
+final class WP_REST_Server
+{
+    public const READABLE = 'GET';
+    public const CREATABLE = 'POST';
+    public const EDITABLE = 'POST, PUT, PATCH';
+    public const DELETABLE = 'DELETE';
+}
+
+final class WP_REST_Response
+{
+    public function __construct(private mixed $data = null, private int $status = 200)
+    {
+    }
+
+    public function get_data(): mixed
+    {
+        return $this->data;
+    }
+
+    public function get_status(): int
+    {
+        return $this->status;
+    }
+}
+
+final class WP_REST_Request
+{
+    /** @param array<string, mixed> $files */
+    public function __construct(private array $files = [])
+    {
+    }
+
+    /** @return array<string, mixed> */
+    public function get_file_params(): array
+    {
+        return $this->files;
+    }
+}
+
+function register_rest_route(string $namespace, string $route, array $args = []): bool
+{
+    $GLOBALS['__test']['routes'] ??= [];
+    $GLOBALS['__test']['routes'][$namespace . $route] = $args;
+
+    return true;
+}

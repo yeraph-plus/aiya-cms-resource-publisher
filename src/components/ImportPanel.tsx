@@ -56,13 +56,17 @@ export default function ImportPanel({ state, onClose, onDone }: Props) {
 
     useEffect(() => {
         const onKey = (event: KeyboardEvent) => {
-            if (event.key === "Escape") {
+            // Mid-import the panel is the only surface that reports which rows
+            // failed, so Esc must not close it out from under the run.
+            // isComposing stops an IME candidate cancellation (Chinese input)
+            // from being read as "close".
+            if (event.key === "Escape" && !pending && !event.isComposing) {
                 onClose();
             }
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-    }, [onClose]);
+    }, [onClose, pending]);
 
     const onFile = async (file: File | undefined) => {
         if (!file) {

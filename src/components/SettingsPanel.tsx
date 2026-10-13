@@ -139,6 +139,9 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
                         <option value="title">ID-标题</option>
                         <option value="none">仅 ID</option>
                     </select>
+                    <span className="col-span-2 text-xs text-neutral-500">
+                        只作用于本地暂存目录：ID-SLUG 取线上 permalink 末段，没有 slug 的行回落标题（历史行要重新同步才会有 slug）。网盘目录由油猴脚本固定用 CA+补零6位ID，不跟随这里。
+                    </span>
                 </div>
 
                 <div className="px-5 pb-5">

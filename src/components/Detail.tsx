@@ -1,16 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RowDTO, StateDTO } from "../types";
 import { TAXONOMY_LABELS, TAXONOMY_ORDER } from "../types";
-import { ensureStagingDir, fetchStagingDir, openStagingDir, saveRow, type RowPatch } from "../api";
+import { ensureStagingDir, fetchStagingDir, openStagingDir, saveRow, uploadImage, type RowPatch } from "../api";
 import { mergeTermTokens, splitTermInput } from "../../shared/terms";
 import FileServeEditor from "./FileServeEditor";
 import { normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
+import { imageTag, insertAtCaret, toBase64 } from "../../shared/image-upload";
 
 interface Props {
     row: RowDTO;
     state: StateDTO;
     busy: boolean;
-    onEdit: () => void;
+    /** Hands the row the server stored back to the App for a one-row update. */
+    onEdit: (row: RowDTO) => void;
+    /** localIds whose pending edit must be dropped rather than flushed — the
+     * App adds one before 还原/删除, which discard the panel's draft. */
+    discardFlush: { current: Set<number> };
     notify: (kind: "ok" | "err", text: string) => void;
 }
 
@@ -29,7 +34,7 @@ interface Draft {
     fileserve: FileServeConfig | null;
 }
 
-export default function Detail({ row, state, busy, onEdit, notify }: Props) {
+export default function Detail({ row, state, busy, onEdit, discardFlush, notify }: Props) {
     const draftFromRow = (source: RowDTO): Draft => ({
         status: source.status,
         title: source.title,
@@ -41,14 +46,26 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
     });
     const [draft, setDraft] = useState<Draft>(() => draftFromRow(row));
     const draftRef = useRef(draft);
-    const saving = useRef(false);
+    // In-flight saves, counted rather than flagged: two persisted drafts can
+    // overlap (an edit arriving while the previous save is still on the wire),
+    // and a boolean would report "nothing in flight" as soon as the first one
+    // settled, letting the server's older copy overwrite the newer draft.
+    const saving = useRef(0);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // The stored file list this draft was built from. The netdisk lane fills
+    // links behind the panel's back, and the server merges the draft against
+    // this base so a stale draft cannot resurrect an empty link. Read at save
+    // time and carried with the draft, so a save already in the debounce keeps
+    // its own base even if the panel rebases in the meantime.
+    const fileserveBase = useRef<string | null>(row.fileserve);
 
     // Writes the draft to the local store. Called by the debounce below and
     // once more from the unmount flush — switching rows must not discard an
-    // edit that has not had its 600ms yet.
-    const persist = async (next: Draft): Promise<void> => {
-        saving.current = true;
+    // edit that has not had its 600ms yet. The saved row goes back to the App,
+    // which replaces that one row: the list is never refetched for a panel
+    // edit, so the panel is not handed its own edit back mid-typing.
+    const persist = async (next: Draft, base: string | null): Promise<void> => {
+        saving.current += 1;
         try {
             const { config } = normalizeConfig(next.fileserve);
             const payload: RowPatch = {
@@ -59,45 +76,74 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
                 dateLocal: next.dateLocal === "" ? "" : `${next.dateLocal}:00`,
                 terms: next.terms,
                 fileserve: Object.keys(config).length > 0 ? config : next.fileserve === null ? null : {},
+                fileserveBase: base,
             };
-            await saveRow(row.localId, payload);
-            onEdit();
+            const saved = await saveRow(row.localId, payload);
+            if (saved.fileserveMoved) {
+                // A netdisk fill won for at least one group. Take the stored
+                // file list so this panel stops disagreeing with it — keeping
+                // the draft would make the next save fight the merge again.
+                const rebased: Draft = {
+                    ...draftRef.current,
+                    fileserve: (saved.row.fileserveParsed ?? null) as FileServeConfig | null,
+                };
+                draftRef.current = rebased;
+                setDraft(rebased);
+                notify("ok", "文件列表已被网盘脚本回填，草稿没有覆盖它；你的其他修改已保存。");
+            }
+            fileserveBase.current = saved.row.fileserve;
+            onEdit(saved.row);
         } catch (error) {
             notify("err", `保存失败：${String(error)}`);
         } finally {
-            saving.current = false;
+            saving.current -= 1;
         }
     };
 
     useEffect(() => {
         return () => {
-            if (timer.current) {
-                clearTimeout(timer.current);
-                void persist(draftRef.current);
+            if (timer.current === null) {
+                return;
             }
+            clearTimeout(timer.current);
+            timer.current = null;
+            // 还原/删除 are replaces, not switches: flushing here would write
+            // the discarded draft straight back over the result (the revert
+            // undone, the deleted row rewritten).
+            if (discardFlush.current.delete(row.localId)) {
+                return;
+            }
+            void persist(draftRef.current, fileserveBase.current);
         };
         // row is constant for this instance (the App keys Detail by row), so
         // the first-render closure is the right one to flush with.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // While no local edit is in flight, adopt what the server round-trip
-    // brought back — a grid-cell edit on this same row must not be clobbered
-    // by a stale panel draft.
+    // Adopt the server's version of the row only when nothing local is
+    // outstanding: a grid-cell edit on this same row has to land in the panel,
+    // but a draft that is still inside its debounce window — or in flight —
+    // must not be overwritten by the round-trip carrying the older text.
+    // `timer` is cleared to null the moment it fires, so a finished save never
+    // holds this guard shut.
     useEffect(() => {
-        if (!saving.current) {
-            const next = draftFromRow(row);
-            draftRef.current = next;
-            setDraft(next);
+        if (saving.current > 0 || timer.current !== null) {
+            return;
         }
+        const next = draftFromRow(row);
+        draftRef.current = next;
+        fileserveBase.current = row.fileserve;
+        setDraft(next);
     }, [row]);
 
     const save = (next: Draft) => {
         if (timer.current) {
             clearTimeout(timer.current);
         }
+        const base = fileserveBase.current;
         timer.current = setTimeout(() => {
-            void persist(next);
+            timer.current = null;
+            void persist(next, base);
         }, 600);
     };
 
@@ -106,6 +152,44 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
         draftRef.current = next;
         setDraft(next);
         save(next);
+    };
+
+    // --- 正文插图 ---------------------------------------------------------
+    // The image goes to the site's pic bed through the local server; what
+    // lands in the content is the returned absolute URL — the same markup
+    // the site's own editor would insert, so the post never depends on
+    // this tool still running.
+    const [uploading, setUploading] = useState(false);
+    const imageInput = useRef<HTMLInputElement | null>(null);
+    // The caret is remembered on every selection change: the picker button
+    // steals focus, so the field's own selection is gone by the time the
+    // upload answers. MAX_SAFE_INTEGER = "no caret seen yet" → append.
+    const caret = useRef(Number.MAX_SAFE_INTEGER);
+    const trackCaret = (field: HTMLTextAreaElement) => {
+        caret.current = field.selectionStart;
+    };
+
+    const onImagePicked = (input: HTMLInputElement) => {
+        const file = input.files?.[0] ?? null;
+        // Reset first: picking the same file twice must still fire change.
+        input.value = "";
+        if (!file) {
+            return;
+        }
+        setUploading(true);
+        void (async () => {
+            try {
+                const encoded = toBase64(await file.arrayBuffer());
+                const uploaded = await uploadImage(file.name, file.type, encoded);
+                const content = insertAtCaret(draftRef.current.content, imageTag(uploaded.url), caret.current);
+                update({ content });
+                notify("ok", `图片已插入：${uploaded.path}`);
+            } catch (error) {
+                notify("err", `图片上传失败：${String(error)}`);
+            } finally {
+                setUploading(false);
+            }
+        })();
     };
 
     const termOptions = useMemo(
@@ -325,15 +409,34 @@ export default function Detail({ row, state, busy, onEdit, notify }: Props) {
                 );
             })}
 
-            <label className="block">
-                <span className="lbl">正文（源码，渲染归站点）</span>
+            <div className="block">
+                <div className="flex items-center justify-between gap-2">
+                    <span className="lbl">正文（源码，渲染归站点）</span>
+                    <button
+                        className="btn"
+                        disabled={busy || uploading}
+                        onClick={() => imageInput.current?.click()}
+                    >
+                        {uploading ? "上传中…" : "插入图片"}
+                    </button>
+                </div>
+                <input
+                    ref={imageInput}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(event) => onImagePicked(event.currentTarget)}
+                />
                 <textarea
                     className="w-full font-mono text-xs leading-5"
                     rows={8}
                     value={draft.content}
                     onChange={(event) => update({ content: event.target.value })}
+                    onSelect={(event) => trackCaret(event.currentTarget)}
+                    onKeyUp={(event) => trackCaret(event.currentTarget)}
+                    onClick={(event) => trackCaret(event.currentTarget)}
                 />
-            </label>
+            </div>
 
             <div>
                 <span className="lbl">本地目录（可选的本地暂存）</span>

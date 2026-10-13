@@ -73,12 +73,16 @@
         "win": {
             "target": [
                 {
-                    "target": "portable",
+                    "target": "nsis",
                     "arch": [
                         "x64"
                     ]
                 }
             ]
+        },
+        "nsis": {
+            "oneClick": false,
+            "allowToChangeInstallationDirectory": true
         },
         "npmRebuild": false
     }

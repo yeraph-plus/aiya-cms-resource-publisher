@@ -275,6 +275,55 @@ export function nextId(config: FileServeConfig): string {
     return String(highest + 1);
 }
 
+/** JSON as a plain group map; anything that is not an object reads as empty. */
+function groupMap(raw: unknown): Record<string, unknown> {
+    return raw !== null && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+}
+
+/**
+ * Three-way merge of one row's file list: what the client's draft was based on
+ * (`base`), the draft itself (`patch`), and what the store holds now
+ * (`stored`).
+ *
+ * The netdisk lane writes links into the store from another window entirely, so
+ * a detail panel opened before a fill holds a draft whose link is still empty.
+ * Writing that draft through would resurrect the empty link and destroy the
+ * share the script just created — but simply refusing the draft would throw
+ * away the user's own edits made in the same panel. So the merge is per group:
+ * a group the store moved on its own keeps the stored value, everything else
+ * takes the draft (including a group the user added, and the removal of a group
+ * neither side moved).
+ *
+ * `moved` reports that at least one stored group won over the draft, which the
+ * caller surfaces so the panel can rebase instead of silently disagreeing with
+ * what is stored.
+ */
+export function mergeFileserveDraft(
+    base: unknown,
+    patch: FileServeConfig,
+    stored: unknown,
+): { config: FileServeConfig; moved: boolean } {
+    const baseMap = groupMap(base);
+    const storedMap = groupMap(stored);
+    const ids = new Set([...Object.keys(storedMap), ...Object.keys(patch), ...Object.keys(baseMap)]);
+    const merged: FileServeConfig = {};
+    let moved = false;
+    for (const id of ids) {
+        // Both sides of this compare come from parsing the stored string, so the
+        // serialization is stable and key order is not a false positive.
+        const storedChanged = JSON.stringify(storedMap[id] ?? null) !== JSON.stringify(baseMap[id] ?? null);
+        if (storedChanged) {
+            moved = true;
+        }
+        const winner = storedChanged ? storedMap[id] : patch[id];
+        if (winner === undefined || winner === null) {
+            continue;
+        }
+        merged[id] = winner as FileGroup;
+    }
+    return { config: merged, moved };
+}
+
 /** A display summary: how many groups and what they cost per file in total. */
 export function configSummary(config: FileServeConfig | null): string {
     if (!config) {

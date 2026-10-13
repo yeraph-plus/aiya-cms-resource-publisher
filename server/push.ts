@@ -1,4 +1,5 @@
 import {
+    getPost,
     getSettings,
     getTermRefs,
     listDirtyPosts,
@@ -48,7 +49,44 @@ function now(): string {
     return new Date().toISOString();
 }
 
-function applyResponse(row: PostRow, item: WpItem): void {
+/** Order-independent identity of a row's term references. */
+function refsKey(refs: Record<string, string[]>): string {
+    return Object.entries(refs)
+        .map(([taxonomy, list]) => `${taxonomy}:${[...list].sort().join(",")}`)
+        .sort()
+        .join("|");
+}
+
+/** True when the row on disk still holds exactly what was pushed. */
+function unchangedSinceRead(row: PostRow, pushedRefs: Record<string, string[]>): boolean {
+    const current = getPost(row.localId);
+    if (!current) {
+        return false;
+    }
+    return (
+        current.status === row.status &&
+        current.title === row.title &&
+        current.content === row.content &&
+        current.authorId === row.authorId &&
+        current.dateLocal === row.dateLocal &&
+        current.fileserve === row.fileserve &&
+        refsKey(getTermRefs(row.localId)) === refsKey(pushedRefs)
+    );
+}
+
+/**
+ * Writes the site's answer back onto the row.
+ *
+ * A push holds its row snapshot across the network call, which can take up to
+ * half a minute — long enough for the user to keep editing that row. Blanket
+ * write-back would then overwrite the newer local text with the pre-push
+ * snapshot and clear `dirty`, so the edit was neither saved nor ever pushed
+ * again. The site-confirmed facts (post id, slug, modified stamp, snapshot)
+ * always land, because they describe the site; the editable content is only
+ * taken from the response while the row still holds the pushed revision.
+ * Otherwise the row stays dirty and the next push carries the newer text.
+ */
+function applyResponse(row: PostRow, item: WpItem, pushedRefs: Record<string, string[]>): void {
     upsertAuthor(item.authorId, item.authorName);
     const termRefs: Record<string, string[]> = {};
     for (const [taxonomy, terms] of Object.entries(item.terms ?? {})) {
@@ -67,27 +105,41 @@ function applyResponse(row: PostRow, item: WpItem): void {
         fileserve: item.fileserve,
     };
 
+    const editedSinceRead = !unchangedSinceRead(row, pushedRefs);
     updatePostRow(row.localId, {
         postId: item.id,
-        status: state.status,
-        title: state.title,
-        content: state.content,
-        authorId: state.authorId,
-        dateLocal: state.dateLocal,
         dateGmt: state.dateGmt,
         modifiedGmt: state.modifiedGmt,
-        // The site confirms the production subset; the local netdisk fields
-        // are re-attached so the pipelines keep their ownership.
-        fileserve: mergeRemoteFileserve(item.fileserve, row.fileserve),
         slug: parseSlugFromLink(item.link),
-        dirty: false,
-        conflict: false,
+        snapshot: JSON.stringify(state),
         missing: false,
+        conflict: false,
         lastError: null,
         lastPushedGmt: now(),
         lastSyncedGmt: now(),
-        snapshot: JSON.stringify(state),
+        dirty: editedSinceRead,
+        ...(editedSinceRead
+            ? {}
+            : {
+                  status: state.status,
+                  title: state.title,
+                  content: state.content,
+                  authorId: state.authorId,
+                  dateLocal: state.dateLocal,
+                  // The site confirms the production subset; the local netdisk
+                  // fields are re-attached so the pipelines keep their ownership.
+                  fileserve: mergeRemoteFileserve(item.fileserve, row.fileserve),
+              }),
     });
+    if (editedSinceRead) {
+        logEvent(
+            "info",
+            "推送",
+            `#${item.id} ${row.title}：推送期间本地又有编辑，站点回执没有覆盖本地内容，该行仍待推送`,
+            item.id,
+        );
+        return;
+    }
     setTermRefs(row.localId, termRefs);
 }
 
@@ -136,7 +188,10 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
             fileserveValue = JSON.stringify(productionConfig(config));
         }
         try {
-            const payload = buildPayload({ ...row, fileserve: fileserveValue }, getTermRefs(row.localId));
+            // Read once and hand the same references to the write-back: they
+            // are what "the pushed revision" means for the race check above.
+            const termRefs = getTermRefs(row.localId);
+            const payload = buildPayload({ ...row, fileserve: fileserveValue }, termRefs);
             const item = row.postId
                 ? await updateResource(
                       { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword, proxyUrl: settings.proxyUrl },
@@ -147,7 +202,7 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
                       { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword, proxyUrl: settings.proxyUrl },
                       payload,
                   );
-            applyResponse(row, item);
+            applyResponse(row, item, termRefs);
             outcome.pushed += 1;
             transportFailures = 0;
             logEvent("info", "推送", `#${item.id} ${row.title}：已写入站点`, item.id);

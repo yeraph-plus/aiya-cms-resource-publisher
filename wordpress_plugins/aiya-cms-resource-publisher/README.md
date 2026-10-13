@@ -2,12 +2,12 @@
 
 为外部发帖器提供 REST API 的 WordPress 插件，命名空间 `aiya-publish/v1`。**随发帖器仓库单仓库维护**：源码真身是 `publisher/wordpress_plugins/aiya-cms-resource-publisher`，`wp-content/plugins/aiya-cms-publish` 是 `npm run plugin:sync`（发帖器仓库）产出的部署副本；历史上的独立 git 仓库已 subtree 并入发帖器仓库。
 
-**依赖 aiya-core**：不声明 `Requires Plugins` 头——该头按插件目录 slug 匹配依赖，而 core 插件本地 slug 为 `aiya-core`、线上为 `aiya-cms-core`，slug 头在两侧不可能同时成立（2026-09-29 摘除）。未安装/未启用 aiya-core 时由入口文件运行时兜底：显示管理提示且不注册任何路由；守卫在钩子回调内判定（WP 按选项顺序加载插件，加载期查 `AIYA_CORE_VERSION` 可能早于 core 而误判）。与 aiya-core 仍保持**零代码耦合**（不调用其类、不挂其内部过滤器），resource 文章类型由 core 注册，运行时以其启用为前提。
+**依赖 aiya-core**：不声明 `Requires Plugins` 头——该头按插件目录 slug 匹配依赖，而 core 插件本地 slug 为 `aiya-core`、线上为 `aiya-cms-core`，slug 头在两侧不可能同时成立（2026-09-29 摘除）。未安装/未启用 aiya-core 时由入口文件运行时兜底：显示管理提示且不注册任何路由；守卫在钩子回调内判定（WP 按选项顺序加载插件，加载期查 `AIYA_CORE_VERSION` 可能早于 core 而误判）。**与 aiya-core 的耦合面**（2026-10-13 起）：resource 文章类型由 core 注册；图片上传**复用 core 图床栈**——`src/Model/PicBedBridge.php` 运行时借用 core 的 `Domain\Media\PicBedStore` / `MediaPaths` / `Api\Presenter\UploadPresenter`（经 `Modules\MediaModule` 取用），落盘目录与处理管线因此与后台图床逐字一致。这是本插件唯一引用 core 代码的地方（不挂其内部过滤器、不调用 `MediaModule::register()`），入口文件只在 `AIYA_CORE_VERSION` 存在时注册该路由。
 
 ## 认证
 
 - 全部路由要求 **WordPress 应用密码**（Basic auth）：WP 后台 → 用户 → 资料页 → 应用密码。
-- 权限：读 = `edit_posts`；写 = `edit_posts` + 逐对象 `edit_post`；`status=publish` 需 `publish_posts`；`authorId` 代发他人需 `edit_others_posts`（编辑/管理员级账号满足）。
+- 权限：读 = `edit_posts`；写 = `edit_posts` + 逐对象 `edit_post`；`status=publish` 需 `publish_posts`；`authorId` 代发他人需 `edit_others_posts`（编辑/管理员级账号满足）；图片上传 = `upload_files`（作者级账号默认具备）。
 - 未登录 / 凭据无效的请求由本插件的 permission_callback 回 401；已登录但能力不足回 403。本插件把 `/aiya-publish/v1` 宣告进 `aiya_core_firstparty_rest_namespaces`，因此 aiya-core 的匿名锁（`lock_wp_v2`）不再把该命名空间剥成 404——各类会话都能拿到自己能力等级对应的确切错误。
 - 纯 HTTP 环境使用应用密码需要 `WP_ENVIRONMENT_TYPE=local`（本地 compose 已设置）。
 
@@ -22,8 +22,11 @@
 | `GET /resource/{id}` | 单条 |
 | `POST /resource` | 新建：`title` 必填，`content`/`status`/`date`+`dateGmt`/`authorId`/`terms`/`fileserve` 可选 |
 | `PUT /resource/{id}` | 更新：字段给了才写；`fileserve` 整体写入 |
+| `POST /uploads/image` | 图片上传：`multipart/form-data` 字段名 `image`，落 core 图床池（`wp-content/aiya_upload_pics/YYYY/MM/`），单文件上限 10MB，失败按管线自身状态码回 400/413/415 |
 
 条目形状：`{id, status, title, content(源码), date, dateGmt, modified, modifiedGmt, link, authorId, authorName, terms{词法:[{id,name,slug}]}, fileserve}`。
+
+上传响应形状（复用 core `UploadPresenter`，与后台图床 AJAX 同形）：`{image:{width,height,mime,title}, url, path}`（`title` 即净化后的原始文件名）；`url` 是绝对地址，`path` 是相对 `wp-content` 的键（如 `aiya_upload_pics/2026/10/xxx.jpg`）。服务端按 finfo 实测 MIME 定扩展名，客户端文件名不参与；缩放/水印/格式走 core 的 image-processor 管线（水印开启）。
 
 ## 写入语义
 

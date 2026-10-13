@@ -5,8 +5,11 @@
  * would die on EADDRINUSE with no recourse but a manual taskkill. On bind
  * failure the squatter is identified over HTTP (this tool's own /api/state
  * shape) and only then tree-killed and retried. Taking over a healthy
- * instance is deliberate: for a single-user local tool, "whoever starts last
- * owns the port" is the invariant that matters.
+ * instance is deliberate for a single-user local tool — "whoever starts last
+ * owns the port" — but the caller limits it to a squatter of the SAME
+ * executable (dev↔dev, packaged↔packaged): dev and the packaged app share the
+ * fixed port the netdisk userscript points at, so the other flavour is
+ * reported instead of killed.
  */
 
 import { execFileSync, spawn } from "node:child_process";

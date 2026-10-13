@@ -160,3 +160,121 @@ describe("netdisk result write-back", () => {
         expect(JSON.parse(db.getPost(localId)!.fileserve!)["1"].url).toBe("https://pan.baidu.com/s/live");
     });
 });
+
+/**
+ * The reported failure: the link the script created does not stick. Nothing
+ * locked the row — the lane writes straight to the database, so an open detail
+ * panel never hears about the fill and keeps a draft whose link is still empty.
+ * Saving any field of that row then put the empty draft back and destroyed the
+ * share, which reads as "the script could not write back".
+ */
+describe("netdisk fill versus a panel that was already open", () => {
+    const filled = "https://pan.baidu.com/s/filled?pwd=a9k2";
+
+    async function fill(localId: number): Promise<void> {
+        const res = await app.inject({
+            method: "POST",
+            url: "/api/netdisk/result",
+            payload: { localId, groupId: "1", netdisk: "baidu", url: filled, code: "a9k2" },
+        });
+        expect(res.json().ok).toBe(true);
+    }
+
+    it("keeps the fill when the panel saves another field with its pre-fill draft", async () => {
+        const localId = db.insertPost({
+            status: "publish",
+            title: "行",
+            postId: 520,
+            fileserve: JSON.stringify({ "1": platformGroup("", "baidu") }),
+        });
+        // What the panel loaded and is still showing while the script runs.
+        const base = db.getPost(localId)!.fileserve!;
+        const draft = JSON.parse(base) as Record<string, unknown>;
+
+        await fill(localId);
+
+        const res = await app.inject({
+            method: "PUT",
+            url: `/api/posts/${localId}`,
+            payload: { title: "改过的标题", fileserve: draft, fileserveBase: base },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().fileserveMoved).toBe(true);
+        // The user's own edit still lands...
+        expect(res.json().row.title).toBe("改过的标题");
+        // ...and the link the script created survives.
+        expect(JSON.parse(db.getPost(localId)!.fileserve!)["1"].url).toBe(filled);
+    });
+
+    it("keeps a group the user added while the fill won its own group", async () => {
+        const localId = db.insertPost({
+            status: "publish",
+            title: "行",
+            postId: 521,
+            fileserve: JSON.stringify({ "1": platformGroup("", "baidu") }),
+        });
+        const base = db.getPost(localId)!.fileserve!;
+        const draft = { ...(JSON.parse(base) as Record<string, unknown>), "2": platformGroup("", "quark") };
+
+        await fill(localId);
+
+        const res = await app.inject({
+            method: "PUT",
+            url: `/api/posts/${localId}`,
+            payload: { fileserve: draft, fileserveBase: base },
+        });
+        expect(res.json().fileserveMoved).toBe(true);
+        const stored = JSON.parse(db.getPost(localId)!.fileserve!) as Record<string, { url: string; netdisk?: string }>;
+        expect(stored["1"]!.url).toBe(filled);
+        expect(stored["2"]!.netdisk).toBe("quark");
+    });
+
+    it("leaves the fill alone for a plain cell edit that carries no file list", async () => {
+        const localId = db.insertPost({
+            status: "publish",
+            title: "行",
+            postId: 522,
+            fileserve: JSON.stringify({ "1": platformGroup("", "baidu") }),
+        });
+        await fill(localId);
+
+        const res = await app.inject({ method: "PUT", url: `/api/posts/${localId}`, payload: { title: "表格里改的" } });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().fileserveMoved).toBe(false);
+        expect(JSON.parse(db.getPost(localId)!.fileserve!)["1"].url).toBe(filled);
+    });
+});
+
+/**
+ * The app has no other way to hear about a fill: the script is a different
+ * client and the write lands in the database directly.
+ */
+describe("netdisk applied cursor", () => {
+    it("reports each fill once, with the whole row", async () => {
+        const localId = db.insertPost({
+            status: "publish",
+            title: "行",
+            postId: 530,
+            fileserve: JSON.stringify({ "1": platformGroup("", "baidu") }),
+        });
+        const start = await app.inject({ method: "GET", url: "/api/netdisk/applied?after=0" });
+
+        await app.inject({
+            method: "POST",
+            url: "/api/netdisk/result",
+            payload: { localId, groupId: "1", netdisk: "baidu", url: "https://pan.baidu.com/s/n1", code: "k1" },
+        });
+
+        const applied = await app.inject({ method: "GET", url: `/api/netdisk/applied?after=${start.json().cursor}` });
+        expect(applied.statusCode).toBe(200);
+        const rows = applied.json().rows;
+        expect(rows.map((row: { localId: number }) => row.localId)).toEqual([localId]);
+        expect(rows[0].fileserveParsed["1"].url).toBe("https://pan.baidu.com/s/n1");
+        // The badge ground truth travels with it: the group is filled now.
+        expect(rows[0].fileServe.status).toBe("complete");
+
+        // Nothing new since that cursor.
+        const again = await app.inject({ method: "GET", url: `/api/netdisk/applied?after=${applied.json().cursor}` });
+        expect(again.json().rows).toEqual([]);
+    });
+});

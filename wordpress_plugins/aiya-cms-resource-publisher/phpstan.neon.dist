@@ -20,5 +20,13 @@ parameters:
     bootstrapFiles:
         - vendor/szepeviktor/phpstan-wordpress/bootstrap.php
 
+    # src/Model/PicBedBridge.php borrows aiya-core's pic-bed classes at
+    # runtime, and the QA container deploys this plugin next to core
+    # (wp-content/plugins/aiya-core). Symbol-scanning core's sources
+    # resolves those references; core's own files are not analysed
+    # here, scanDirectories only registers their symbols.
+    scanDirectories:
+        - ../aiya-core/src
+
     inferPrivatePropertyTypeFromConstructor: true
     treatPhpDocTypesAsCertain: false

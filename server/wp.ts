@@ -5,7 +5,7 @@
  * applies to every outbound call via undici's ProxyAgent.
  */
 
-import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from "undici";
+import { fetch as undiciFetch, FormData as UndiciFormData, ProxyAgent, type Dispatcher } from "undici";
 
 export interface WpCreds {
     siteUrl: string;
@@ -111,27 +111,13 @@ function proxyDispatcher(proxyUrl: string | undefined): Dispatcher | null {
     return agent;
 }
 
-async function request<T>(creds: WpCreds, method: string, path: string, payload?: unknown, capture?: (response: Response) => void): Promise<T> {
-    const root = `${normalizeSiteUrl(creds.siteUrl)}/wp-json/aiya-publish/v1`;
-    const dispatcher = proxyDispatcher(creds.proxyUrl);
-    let response: Response;
-    try {
-        response = await undiciFetch(root + path, {
-            method,
-            headers: {
-                Authorization: `Basic ${Buffer.from(`${creds.username}:${creds.appPassword}`).toString("base64")}`,
-                ...(payload !== undefined ? { "Content-Type": "application/json; charset=utf-8" } : {}),
-            },
-            body: payload !== undefined ? JSON.stringify(payload) : undefined,
-            signal: AbortSignal.timeout(30_000),
-            ...(dispatcher ? { dispatcher } : {}),
-        }) as unknown as Response;
-    } catch (error) {
-        const hint = dispatcher ? `（代理 ${creds.proxyUrl}）` : "";
-        throw new WpError(0, "aiya_publish_unreachable", `无法连接站点${hint}：${String(error)}`);
-    }
-    capture?.(response);
-
+/**
+ * Response → body, or the failure WordPress and the edge actually sent:
+ * the REST error envelope when there is one, the Cloudflare challenge
+ * notice when the edge answered instead of the site, a bare status
+ * otherwise. Shared by the JSON calls and the multipart upload.
+ */
+async function unwrap<T>(response: Response): Promise<T> {
     const text = await response.text();
     let body: unknown = null;
     try {
@@ -155,6 +141,90 @@ async function request<T>(creds: WpCreds, method: string, path: string, payload?
         );
     }
     return body as T;
+}
+
+async function request<T>(creds: WpCreds, method: string, path: string, payload?: unknown, capture?: (response: Response) => void): Promise<T> {
+    const root = `${normalizeSiteUrl(creds.siteUrl)}/wp-json/aiya-publish/v1`;
+    const dispatcher = proxyDispatcher(creds.proxyUrl);
+    let response: Response;
+    try {
+        response = await undiciFetch(root + path, {
+            method,
+            headers: {
+                Authorization: `Basic ${Buffer.from(`${creds.username}:${creds.appPassword}`).toString("base64")}`,
+                ...(payload !== undefined ? { "Content-Type": "application/json; charset=utf-8" } : {}),
+            },
+            body: payload !== undefined ? JSON.stringify(payload) : undefined,
+            signal: AbortSignal.timeout(30_000),
+            ...(dispatcher ? { dispatcher } : {}),
+        }) as unknown as Response;
+    } catch (error) {
+        const hint = dispatcher ? `（代理 ${creds.proxyUrl}）` : "";
+        throw new WpError(0, "aiya_publish_unreachable", `无法连接站点${hint}：${String(error)}`);
+    }
+    capture?.(response);
+
+    return unwrap<T>(response);
+}
+
+export interface WpUploadedImage {
+    width: number;
+    height: number;
+    mime: string;
+    /** The original filename, sanitized by the site (core's `title` field). */
+    title: string;
+}
+
+/** The site's pic-bed answer, shape for shape the admin screen's own. */
+export interface WpUploadResult {
+    image: WpUploadedImage;
+    /** Absolute URL of the stored image. */
+    url: string;
+    /** Storage key relative to wp-content (aiya_upload_pics/YYYY/MM/…). */
+    path: string;
+}
+
+/**
+ * One image into the site's pic-bed pool.
+ *
+ * Multipart with the file in the `image` field — the same field the admin
+ * pic-bed screen posts — so the site files it into the same dated
+ * directory and runs the same pipeline. No Content-Type is set by hand:
+ * undici derives the multipart boundary from the FormData body. The
+ * timeout is far longer than the JSON calls': the site scales,
+ * watermarks and re-encodes the image inline before answering.
+ */
+export async function uploadImage(
+    creds: WpCreds,
+    filename: string,
+    mime: string,
+    data: Uint8Array,
+    timeoutMs = 120_000,
+): Promise<WpUploadResult> {
+    const root = `${normalizeSiteUrl(creds.siteUrl)}/wp-json/aiya-publish/v1`;
+    const dispatcher = proxyDispatcher(creds.proxyUrl);
+    // undici declares its own FormData and expects that type in RequestInit;
+    // Node's global one is the same implementation, just a different type id.
+    const form = new UndiciFormData();
+    form.append("image", new Blob([data], { type: mime === "" ? "application/octet-stream" : mime }), filename);
+
+    let response: Response;
+    try {
+        response = (await undiciFetch(root + "/uploads/image", {
+            method: "POST",
+            headers: {
+                Authorization: `Basic ${Buffer.from(`${creds.username}:${creds.appPassword}`).toString("base64")}`,
+            },
+            body: form,
+            signal: AbortSignal.timeout(timeoutMs),
+            ...(dispatcher ? { dispatcher } : {}),
+        })) as unknown as Response;
+    } catch (error) {
+        const hint = dispatcher ? `（代理 ${creds.proxyUrl}）` : "";
+        throw new WpError(0, "aiya_publish_unreachable", `无法连接站点${hint}：${String(error)}`);
+    }
+
+    return unwrap<WpUploadResult>(response);
 }
 
 export async function ping(creds: WpCreds): Promise<WpPing> {

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AIYA 网盘分享回填（百度）
 // @namespace    aiya-netdisk
-// @version      0.5.3
-// @description  在百度网盘 web 端定位发帖器同名目录、创建分享并把链接回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
+// @version      0.5.5
+// @description  在百度网盘 web 端定位/创建 CA{补零ID} 目录、创建分享并把链接（带 ?pwd=提取码）回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
 // @match        https://pan.baidu.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -107,13 +107,25 @@
         return bdstoken;
     }
 
+    /** The netdisk folder's name: CA + the post id zero-padded to six
+     * digits (CA003276). Deliberately independent of the tool's 目录命名
+     * setting — the netdisk folder keeps one stable shape, so changing that
+     * setting never renames or re-creates folders here. */
+    function folderName(postId) {
+        return `CA${String(postId).padStart(6, "0")}`;
+    }
+
     /** The staged folder under the configured root: listed first (covers the
      * uploaded-already case), created when missing — the share is a live view
      * of the folder, so files the client uploads afterwards simply appear in
-     * it. Identification is the 6-digit padded id exactly. */
-    async function findFolder(dirName) {
-        const id = dirName.split("-")[0];
-        const matchName = (name) => name === id || name.startsWith(`${id}-`);
+     * it. Identification is the padded id, so an already-uploaded folder is
+     * always reused (a re-share must point at the folder holding the files)
+     * and hand-renamed folders never break the link: the CA shape and the
+     * legacy `003276-标题` one both match, the exact CA name winning. */
+    async function findFolder(item) {
+        const dirName = item.dirName;
+        const id = String(item.postId).padStart(6, "0");
+        const matchName = (name) => name === `CA${id}` || name === id || name.startsWith(`${id}-`);
         for (let page = 1; ; page += 1) {
             const result = await apiJson("/api/list", {
                 params: {
@@ -214,26 +226,42 @@
         return link;
     }
 
+    /** The share link with its extraction code folded in, `?pwd=xxxx` — the
+     * shape the netdisk's own 「复制链接及提取码」 hands out, so the stored link
+     * is one click for a reader instead of link-plus-code. The code is also
+     * still sent separately: the group keeps its 提取码 field. A link that
+     * already carries pwd is left alone, a query string keeps its own
+     * separator, and a fragment stays last. */
+    function withPwd(link, code) {
+        if (/[?&]pwd=/.test(link)) {
+            return link;
+        }
+        const [base, ...fragment] = link.split("#");
+        const hash = fragment.length > 0 ? `#${fragment.join("#")}` : "";
+        return `${base}${base.includes("?") ? "&" : "?"}pwd=${code}${hash}`;
+    }
+
     // ---------- 单行处理 -----------------------------------------------------
     const PIPELINE = "baidu"; // 本脚本所属管线；队列只认领 netdisk=baidu 的空链接组
 
     async function processItem(item) {
         setStatus(item, "run", "定位/创建目录…");
-        const { entry, created } = await findFolder(item.dirName);
+        const { entry, created } = await findFolder(item);
         setStatus(item, "run", `${created ? "已创建" : "已定位"} ${entry.server_filename}，创建分享…`);
         const code = randomCode();
         const link = await createShare(entry, code);
+        const linkWithPwd = withPwd(link, code);
         setStatus(item, "run", "回填发帖器…");
         await publisherFetch("/api/netdisk/result", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ localId: item.localId, groupId: item.groupId, netdisk: PIPELINE, url: link, code }),
+            body: JSON.stringify({ localId: item.localId, groupId: item.groupId, netdisk: PIPELINE, url: linkWithPwd, code }),
         });
         const periodText = cfg.period === "0" ? "永久" : `${cfg.period} 天`;
         setStatus(
             item,
             "done",
-            `已回填：${link}（提取码 ${code} · ${periodText}）` +
+            `已回填：${linkWithPwd}（提取码 ${code} · ${periodText}）` +
                 (created ? "；客户端把文件传进该目录即可，分享实时可见" : ""),
         );
     }
@@ -384,7 +412,10 @@
     function refreshQueue() {
         return publisherFetch(`/api/netdisk/queue?netdisk=${encodeURIComponent(PIPELINE)}`)
             .then((data) => {
-                queue = data.queue.map((item) => ({ ...item }));
+                // The folder name is the script's, not the server's: the
+                // queue's dirName follows the tool's 目录命名 setting, which the
+                // netdisk side deliberately ignores.
+                queue = data.queue.map((item) => ({ ...item, dirName: folderName(item.postId) }));
                 renderQueue();
                 setMsg(`队列已刷新：${queue.length} 条待处理`);
             })

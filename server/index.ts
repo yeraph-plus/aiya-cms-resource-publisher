@@ -26,17 +26,66 @@ import {
 import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
 import { fileServeState } from "./fileserveState.js";
-import { applyResult, buildQueue } from "./netdisklane.js";
+import { appliedSince, applyResult, buildQueue } from "./netdisklane.js";
 import { ensureStagingDir, findStagingDir, openStagingDir } from "./dirs.js";
 import { isOurStateEndpoint, killTree, listenerPid } from "./portguard.js";
 import { getProgress, setProgress } from "./progress.js";
-import { normalizeSiteUrl, ping, WpError } from "./wp.js";
+import { normalizeSiteUrl, ping, uploadImage, WpError } from "./wp.js";
 import { parseCsv } from "../shared/csv.js";
 import { buildImportRows, guessMapping, TAXONOMY_ORDER, type ImportMapping } from "../shared/import.js";
-import { mergeRemoteFileserve, normalizeConfig } from "../shared/fileserve.js";
+import { mergeFileserveDraft, mergeRemoteFileserve, normalizeConfig } from "../shared/fileserve.js";
 
 export async function buildApp(): Promise<FastifyInstance> {
     const app = Fastify({ logger: false, bodyLimit: 16 * 1024 * 1024 });
+
+    // --- 只接受本机请求 -------------------------------------------------------
+    // The tool listens on a fixed localhost port and its whole job is writing
+    // to a live site, so any page the user happens to have open can reach it.
+    // Fastify parses text/plain out of the box, which makes a cross-site
+    // `fetch(..., { mode: "no-cors" })` a *simple* request: no preflight, no
+    // CORS check, and the write already happened by the time the browser
+    // refuses to hand the response back. Origin and Host are therefore checked
+    // here, before any route runs. The netdisk endpoints are cross-origin by
+    // design and stay pinned to their one allowed origin; the Host check is
+    // what also closes DNS rebinding, where Origin looks same-site but the
+    // name points at this machine.
+    const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+    const NETDISK_ORIGIN = "https://pan.baidu.com";
+    /** A userscript manager's own origin (Tampermonkey's GM_xmlhttpRequest). */
+    const isExtensionOrigin = (origin: string): boolean =>
+        /^(chrome|moz|safari-web|ms-browser)-extension:\/\//.test(origin);
+    const hostnameOf = (value: string): string | null => {
+        try {
+            return new URL(value.includes("://") ? value : `http://${value}`).hostname;
+        } catch {
+            return null;
+        }
+    };
+    app.addHook("onRequest", async (request, reply) => {
+        const host = hostnameOf(String(request.headers.host ?? ""));
+        if (host === null || !LOCAL_HOSTS.has(host)) {
+            return reply.code(403).send({ error: "只接受来自本机的请求。" });
+        }
+        const origin = request.headers.origin;
+        if (typeof origin !== "string" || origin === "") {
+            // No Origin: a same-origin fetch, curl, or the Electron shell.
+            return;
+        }
+        const originHost = hostnameOf(origin);
+        if (originHost !== null && LOCAL_HOSTS.has(originHost)) {
+            return;
+        }
+        // The netdisk script is the one legitimate cross-origin caller. Its
+        // requests either carry the page origin (plain fetch) or come from the
+        // userscript manager's own extension context — GM_xmlhttpRequest sends
+        // the extension origin, or no usable one at all, and it skips CORS
+        // entirely. A web page can only ever present its own http(s) origin, so
+        // allowing the script's shapes here still keeps other sites out.
+        if (request.url.startsWith("/api/netdisk/") && (origin === NETDISK_ORIGIN || isExtensionOrigin(origin))) {
+            return;
+        }
+        return reply.code(403).send({ error: "跨站请求被拒绝。" });
+    });
 
     // One corrupt fileserve blob (a hand-edited db, an interrupted write)
     // must not take the whole state endpoint down.
@@ -165,7 +214,10 @@ function errorMessage(error: unknown): string {
         dirty: true,
         lastSyncedGmt: null,
     });
-    return { localId };
+    // The stored row travels back with the id: the client appends it to the
+    // table instead of refetching every post just to see one new row.
+    const saved = getPost(localId);
+    return { localId, row: saved ? rowWithTerms(saved) : null };
 });
 
     app.put("/api/posts/:id", async (request, reply) => {
@@ -184,11 +236,29 @@ function errorMessage(error: unknown): string {
         return reply.code(400).send({ error: errors.join(" ") });
     }
     const providesFileserve = body.fileserve !== null && body.fileserve !== undefined;
-    const fileserve = providesFileserve
-        ? Object.keys(config).length > 0
-            ? JSON.stringify(config)
-            : "{}"
-        : row.fileserve;
+
+    // Optimistic concurrency for the file list. The netdisk lane fills links
+    // behind the client's back, and a detail panel that was opened before that
+    // fill holds a draft whose link is still empty — saving *any* field of the
+    // row would put that draft back and destroy the link. A patch that says
+    // which version it was based on is therefore merged against the stored one
+    // per group, so the fill survives while the user's own edits still land.
+    // A patch without a base (an older client, a plain cell edit) keeps the
+    // previous write-through behaviour.
+    const { fileserveBase } = body;
+    const hasFileserveBase = fileserveBase !== undefined;
+    let fileserveMoved = false;
+    let fileserve: string | null;
+    if (!providesFileserve) {
+        fileserve = row.fileserve;
+    } else if (hasFileserveBase) {
+        const base = fileserveBase === null ? null : String(fileserveBase);
+        const merged = mergeFileserveDraft(parseFileserve(base), config, parseFileserve(row.fileserve));
+        fileserveMoved = merged.moved;
+        fileserve = Object.keys(merged.config).length > 0 ? JSON.stringify(merged.config) : "{}";
+    } else {
+        fileserve = Object.keys(config).length > 0 ? JSON.stringify(config) : "{}";
+    }
 
     // Partial patches (a grid cell edit) must not touch the author: only an
     // explicit value (or an explicit null = "site default") changes it.
@@ -250,6 +320,9 @@ function errorMessage(error: unknown): string {
     const saved = getPost(localId);
     return {
         row: saved ? rowWithTerms(saved) : null,
+        // True when the patch's file list lost to a newer one (a netdisk fill);
+        // the returned row carries what is actually stored.
+        fileserveMoved,
     };
 });
 
@@ -285,7 +358,8 @@ function errorMessage(error: unknown): string {
         lastError: null,
     });
     setTermRefs(localId, snapshot.terms);
-    return { ok: true };
+    const reverted = getPost(localId);
+    return { ok: true, row: reverted ? rowWithTerms(reverted) : null };
 });
 
     // CSV import, two stateless steps: the client sends the raw file text
@@ -401,6 +475,57 @@ function errorMessage(error: unknown): string {
 
     app.get("/api/progress", async () => getProgress());
 
+    // --- 正文插图（图片上传）-------------------------------------------------
+    // The picked file arrives as base64 JSON rather than multipart: the
+    // browser has to read it into memory either way, and a 10MB image
+    // encodes to ~13.4MB — inside the 16MB body limit, so the tool keeps
+    // its single JSON request shape and the server does the multipart leg
+    // to the site.
+    const UPLOAD_MAX_MB = 10;
+    const UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024;
+
+    app.post("/api/uploads/image", async (request, reply) => {
+        const body = (request.body ?? {}) as { filename?: unknown; mime?: unknown; dataBase64?: unknown };
+        const filename = typeof body.filename === "string" ? body.filename.trim() : "";
+        const encoded = typeof body.dataBase64 === "string" ? body.dataBase64 : "";
+        if (filename === "" || encoded === "") {
+            return reply.code(400).send({ error: "没有收到图片数据。" });
+        }
+        // Reject before decoding: Buffer.from() would happily eat garbage.
+        if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+            return reply.code(400).send({ error: "图片数据不是合法的 base64。" });
+        }
+        const bytes = Buffer.from(encoded, "base64");
+        if (bytes.length === 0) {
+            return reply.code(400).send({ error: "图片数据为空。" });
+        }
+        if (bytes.length > UPLOAD_MAX_BYTES) {
+            return reply.code(413).send({ error: `图片超过 ${UPLOAD_MAX_MB}MB 上限（站点图床的限制）。` });
+        }
+        const settings = getSettings();
+        if (!settings.siteUrl || !settings.username || !settings.appPassword) {
+            return reply.code(400).send({ error: "先填好站点地址、用户名和应用密码。" });
+        }
+        try {
+            const uploaded = await uploadImage(
+                {
+                    siteUrl: settings.siteUrl,
+                    username: settings.username,
+                    appPassword: settings.appPassword,
+                    proxyUrl: settings.proxyUrl,
+                },
+                filename,
+                typeof body.mime === "string" ? body.mime : "",
+                bytes,
+            );
+            logEvent("info", "上传", `${filename} → ${uploaded.path}`);
+            return uploaded;
+        } catch (error) {
+            logEvent("error", "上传", `${filename}：${errorMessage(error)}`);
+            return reply.code(400).send({ error: errorMessage(error) });
+        }
+    });
+
     // --- Local staging directories (本地目录，纯本地辅助) ---------------------
     // A convenience for staging files locally before the client upload; the
     // netdisk lane neither reads nor requires it — the script names and
@@ -447,11 +572,30 @@ function errorMessage(error: unknown): string {
     // --- Netdisk share lane (网盘分享回填) -----------------------------------
     // The userscript on pan.baidu.com polls the queue and posts share links
     // back. CORS is pinned to the netdisk origin: the page's own fetch needs
-    // it, and pinning keeps every other site blind to the local tool.
-    const NETDISK_ORIGIN = "https://pan.baidu.com";
+    // it, and pinning keeps every other site blind to the local tool. The
+    // origin itself is declared with the local-only guard at the top, which is
+    // what actually enforces it.
     const netdiskCors = (reply: FastifyReply): void => {
         reply.header("Access-Control-Allow-Origin", NETDISK_ORIGIN).header("Vary", "Origin");
     };
+
+    // How an open client hears that the lane filled a link behind its back.
+    // Same-origin only (no CORS header here): the app polls it, the userscript
+    // never does. The whole row travels with it — the client splices single
+    // rows, so no second round trip is needed to see the filled link.
+    app.get("/api/netdisk/applied", async (request) => {
+        const query = request.query as { after?: string };
+        const after = Number(query.after ?? "0");
+        const { cursor, localIds } = appliedSince(Number.isFinite(after) && after >= 0 ? after : 0);
+        const rows: ReturnType<typeof rowWithTerms>[] = [];
+        for (const localId of localIds) {
+            const row = getPost(localId);
+            if (row) {
+                rows.push(rowWithTerms(row));
+            }
+        }
+        return { cursor, rows };
+    });
 
     for (const path of ["/api/netdisk/queue", "/api/netdisk/result"]) {
         app.options(path, async (request, reply) => {
@@ -519,7 +663,7 @@ function errorMessage(error: unknown): string {
     return app;
 }
 
-const PORT = Number(process.env.PUBLISHER_PORT ?? 5175);
+export const PUBLISHER_PORT = Number(process.env.PUBLISHER_PORT ?? 5175);
 
 // Only a directly-run process binds the port; a test import builds the app
 // and talks to it with inject.
@@ -534,6 +678,76 @@ const isEntry = (() => {
         return false;
     }
 })();
+
+/**
+ * Binds the fixed local port, taking over a stale instance of the same
+ * executable that a hard kill left holding it.
+ *
+ * Shared by the CLI entry (npm start / tsx watch) and the Electron shell, so
+ * both flavours answer on the same 5175 the Tampermonkey netdisk script
+ * points at — the packaged app used to pick a random port, which the script
+ * could never find.
+ *
+ * A squatter from the other flavour (dev holding the port while the packaged
+ * app starts, or the reverse) is reported instead of killed: dev and the
+ * packaged app share one port on purpose, so only one of them may run.
+ */
+export async function listenWithPortguard(port: number = PUBLISHER_PORT): Promise<FastifyInstance> {
+    // The retry exists for the hard-kill orphan: a publisher killed without
+    // its signal handlers leaves the old server holding the port, and the
+    // portguard evicts exactly that squatter (our own /api/state fingerprint)
+    // before the second bind attempt. Anything else on the port aborts with
+    // its PID instead of being touched.
+    for (let attempt = 0; ; attempt += 1) {
+        const app = await buildApp();
+        try {
+            await app.listen({ port, host: "127.0.0.1" });
+        } catch (error) {
+            await app.close().catch(() => {});
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "EADDRINUSE" || attempt > 0) {
+                if (code === "EADDRINUSE") {
+                    const squatter = listenerPid(port);
+                    console.error(
+                        `端口 ${port} 仍被占用（PID ${squatter?.pid ?? "?"}${squatter?.image ? `，${squatter.image}` : ""}）——结束它后再启动。`,
+                    );
+                } else {
+                    console.error(error);
+                }
+                throw error;
+            }
+            const squatter = listenerPid(port);
+            if (!squatter || !(await isOurStateEndpoint(port))) {
+                logEvent("error", "应用", `端口 ${port} 被其它进程占用，无法启动（PID ${squatter?.pid ?? "?"}）`);
+                console.error(
+                    `端口 ${port} 被其它进程占用（PID ${squatter?.pid ?? "?"}${squatter?.image ? `，${squatter.image}` : ""}）——不是本工具实例，请自行处理后再启动。`,
+                );
+                throw error;
+            }
+            const selfImage = path.basename(process.execPath);
+            if (squatter.image !== null && squatter.image.toLowerCase() !== selfImage.toLowerCase()) {
+                logEvent(
+                    "error",
+                    "应用",
+                    `端口 ${port} 上是本工具的另一个形态（PID ${squatter.pid}，${squatter.image}），当前进程是 ${selfImage}`,
+                );
+                console.error(
+                    `端口 ${port} 上是本工具的另一个形态（PID ${squatter.pid}，${squatter.image}）——dev 与打包版共用该端口，先关掉它再启动。`,
+                );
+                throw error;
+            }
+            logEvent("warn", "应用", `端口 ${port} 上的残留实例被接管（PID ${squatter.pid}，强杀遗留的孤儿）`);
+            console.log(`端口 ${port} 上是本工具的残留实例（PID ${squatter.pid}，强杀遗留的孤儿），接管中……`);
+            killTree(squatter.pid);
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            continue;
+        }
+        logEvent("info", "应用", `发帖器已启动：http://localhost:${port}`);
+        console.log(`AIYA Publisher listening on http://localhost:${port}`);
+        console.log(`db: ${dbPath}`);
+        return app;
+    }
+}
 
 if (isEntry) {
     let current: FastifyInstance | null = null;
@@ -553,48 +767,10 @@ if (isEntry) {
         });
     }
 
-    // The retry exists for the hard-kill orphan: a publisher killed without
-    // its signal handlers leaves the old server holding the port, and the
-    // portguard evicts exactly that squatter (our own /api/state fingerprint)
-    // before the second bind attempt. Anything else on the port aborts with
-    // its PID instead of being touched.
-    for (let attempt = 0; ; attempt += 1) {
-        const app = await buildApp();
-        current = app;
-        try {
-            await app.listen({ port: PORT, host: "127.0.0.1" });
-        } catch (error) {
-            await app.close().catch(() => {});
-            current = null;
-            const code = (error as NodeJS.ErrnoException).code;
-            if (code !== "EADDRINUSE" || attempt > 0) {
-                if (code === "EADDRINUSE") {
-                    const squatter = listenerPid(PORT);
-                    console.error(
-                        `端口 ${PORT} 仍被占用（PID ${squatter?.pid ?? "?"}${squatter?.image ? `，${squatter.image}` : ""}）——结束它后再启动。`,
-                    );
-                } else {
-                    console.error(error);
-                }
-                process.exit(1);
-            }
-            const squatter = listenerPid(PORT);
-            if (!squatter || !(await isOurStateEndpoint(PORT))) {
-                logEvent("error", "应用", `端口 ${PORT} 被其它进程占用，无法启动（PID ${squatter?.pid ?? "?"}）`);
-                console.error(
-                    `端口 ${PORT} 被其它进程占用（PID ${squatter?.pid ?? "?"}${squatter?.image ? `，${squatter.image}` : ""}）——不是本工具实例，请自行处理后再启动。`,
-                );
-                process.exit(1);
-            }
-            logEvent("warn", "应用", `端口 ${PORT} 上的残留实例被接管（PID ${squatter.pid}，强杀遗留的孤儿）`);
-            console.log(`端口 ${PORT} 上是本工具的残留实例（PID ${squatter.pid}，强杀遗留的孤儿），接管中……`);
-            killTree(squatter.pid);
-            await new Promise((resolve) => setTimeout(resolve, 800));
-            continue;
-        }
-        logEvent("info", "应用", `发帖器已启动：http://localhost:${PORT}`);
-        console.log(`AIYA Publisher listening on http://localhost:${PORT}`);
-        console.log(`db: ${dbPath}`);
-        break;
+    try {
+        current = await listenWithPortguard();
+    } catch {
+        // listenWithPortguard already reported the squatter (PID and image).
+        process.exit(1);
     }
 }

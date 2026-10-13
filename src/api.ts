@@ -30,24 +30,50 @@ export interface RowPatch {
     authorId?: number | null;
     dateLocal?: string;
     fileserve?: unknown;
+    /** The row's stored `fileserve` string this draft was built from, so the
+     * server can merge a patch whose file list moved on its own (a netdisk
+     * fill) instead of letting a stale draft overwrite it. */
+    fileserveBase?: string | null;
     terms?: Record<string, string[]>;
 }
 
-export function saveRow(localId: number, patch: RowPatch): Promise<RowDTO> {
-    return call<RowDTO>(`/api/posts/${localId}`, "PUT", patch);
+export interface SaveRowResult {
+    row: RowDTO;
+    /** The draft's file list lost at least one group to a newer stored value —
+     * a netdisk fill. The returned row carries what is actually stored. */
+    fileserveMoved: boolean;
 }
 
-export async function createRow(title?: string): Promise<number> {
-    const body = await call<{ localId: number }>("/api/posts", "POST", { title });
-    return body.localId;
+/** Saves a partial patch and returns the row the server stored. The route
+ * answers `{ row }` — unwrapping here keeps the mismatch from silently
+ * becoming a junk row in the table for callers that use the result. */
+export async function saveRow(localId: number, patch: RowPatch): Promise<SaveRowResult> {
+    const body = await call<{ row: RowDTO | null; fileserveMoved?: boolean }>(`/api/posts/${localId}`, "PUT", patch);
+    if (!body.row) {
+        throw new Error("保存之后读不回本地行。");
+    }
+    return { row: body.row, fileserveMoved: body.fileserveMoved === true };
+}
+
+/** Creates a local row and hands back the row the server stored, so the
+ * caller can splice it into the table instead of refetching the whole list. */
+export async function createRow(title?: string): Promise<RowDTO> {
+    const body = await call<{ localId: number; row: RowDTO | null }>("/api/posts", "POST", { title });
+    if (!body.row) {
+        throw new Error("新建行之后读不回本地行。");
+    }
+    return body.row;
 }
 
 export function deleteRow(localId: number): Promise<{ ok: boolean }> {
     return call<{ ok: boolean }>(`/api/posts/${localId}`, "DELETE");
 }
 
-export function revertRow(localId: number): Promise<{ ok: boolean }> {
-    return call<{ ok: boolean }>(`/api/posts/${localId}/revert`, "POST");
+/** Restores the last site-confirmed snapshot; the reverted row comes back so
+ * only that row has to be replaced in the client's state. */
+export async function revertRow(localId: number): Promise<RowDTO | null> {
+    const body = await call<{ ok: boolean; row: RowDTO | null }>(`/api/posts/${localId}/revert`, "POST");
+    return body.row;
 }
 
 export interface SaveSettingsPayload {
@@ -181,4 +207,31 @@ export function openStagingDir(localId: number): Promise<StagingDirDTO> {
 
 export function fetchStagingDir(localId: number): Promise<{ dir: string | null; name: string | null }> {
     return call<{ dir: string | null; name: string | null }>(`/api/fileserve-dir/${localId}`, "GET");
+}
+
+/**
+ * Rows the netdisk lane filled since `after`, with the cursor for the next
+ * poll. The userscript writes those links into the database from the
+ * pan.baidu.com page, so this is the only way an open tab learns about them.
+ */
+export function fetchNetdiskApplied(after: number): Promise<{ cursor: number; rows: RowDTO[] }> {
+    return call<{ cursor: number; rows: RowDTO[] }>(`/api/netdisk/applied?after=${after}`, "GET");
+}
+
+export interface UploadImageResultDTO {
+    /** Post-pipeline facts; `title` is the sanitized original filename. */
+    image: { width: number; height: number; mime: string; title: string };
+    /** Absolute URL, ready to drop into an <img src>. */
+    url: string;
+    /** Storage key under wp-content, shown in the success toast. */
+    path: string;
+}
+
+/**
+ * One image into the site's pic bed. base64 over JSON, not multipart:
+ * the server owns the multipart leg to the site, so the tool keeps a
+ * single request shape (and no new multipart dependency).
+ */
+export function uploadImage(filename: string, mime: string, dataBase64: string): Promise<UploadImageResultDTO> {
+    return call<UploadImageResultDTO>("/api/uploads/image", "POST", { filename, mime, dataBase64 });
 }
