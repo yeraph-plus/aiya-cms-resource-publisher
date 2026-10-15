@@ -4,6 +4,7 @@ dist-server/
 release/
 publisher.db
 publisher.db-*
+intake.config.json
 *.log
 .native/
 archives/

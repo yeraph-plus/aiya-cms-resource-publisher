@@ -178,6 +178,9 @@ export interface ImportRow {
     authorId: number | null;
     dateLocal: string;
     termRefs: Record<string, string[]>;
+    /** A spreadsheet has no file list; the server attaches the 挂网盘待办组
+     *  default to every fresh row that arrives without one. */
+    fileserve?: string | null;
 }
 
 export interface ImportRowError {

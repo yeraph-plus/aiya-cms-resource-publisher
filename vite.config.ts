@@ -11,6 +11,15 @@ export default defineConfig({
         // evicted by scripts/dev.mjs (our own stale Vite) or is someone
         // else's and must be resolved by hand.
         strictPort: true,
+        watch: {
+            // Editors write atomically: a temp directory (or file) appears next
+            // to the target for a moment during a save. Inside the watched
+            // tree that is a race Vite can lose — watch() on a temp path that
+            // is already gone comes back EBUSY on Windows, and an FSWatcher
+            // error takes the whole dev server down mid-edit. Nothing that
+            // matters lives in those paths.
+            ignored: ["**/.*.tmpdir/**", "**/*.tmp", "**/.*~"],
+        },
         proxy: {
             // 127.0.0.1, not localhost: the API server binds IPv4 only, and a
             // localhost target can resolve to ::1 first on Windows.

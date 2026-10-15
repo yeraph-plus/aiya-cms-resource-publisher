@@ -9,6 +9,12 @@ export interface SettingsDTO {
     lastSyncCursor: string | null;
     workRoot: string;
     dirNameSuffix: string;
+    /** Status a row created without one gets (摄取/新建行). */
+    newRowStatus: string;
+    /** Attach the selected netdisk pipelines to every brand-new row. */
+    netdiskTodoEnabled: boolean;
+    /** Comma-joined NETDISK_OPTIONS ids. */
+    netdiskTodoGroups: string;
 }
 
 export interface AuthorDTO {
@@ -21,6 +27,8 @@ export interface TermInfo {
     id: number;
     name: string;
     slug: string;
+    /** Hierarchical taxonomies (分类) only: parent term id, 0 = top level. */
+    parent: number;
 }
 
 /** Server-recomputed work state of a row's file groups — the grid badge's

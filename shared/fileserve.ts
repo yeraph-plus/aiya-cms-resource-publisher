@@ -95,6 +95,23 @@ export function netdiskLabel(id: string | undefined): string {
     return NETDISK_OPTIONS.find((option) => option.id === id)?.label ?? (id || "baidu");
 }
 
+/** Whitelist filter for pipeline ids: unknown ids are dropped, order kept. */
+export function knownNetdisks(ids: string[]): string[] {
+    const kept: string[] = [];
+    for (const id of ids) {
+        const value = id.trim();
+        if (value !== "" && NETDISK_OPTIONS.some((option) => option.id === value) && !kept.includes(value)) {
+            kept.push(value);
+        }
+    }
+    return kept;
+}
+
+/** The stored setting (comma/space separated pipeline ids) → whitelisted ids. */
+export function parseNetdiskTodo(raw: string | null | undefined): string[] {
+    return knownNetdisks((raw ?? "").split(/[,\s]+/));
+}
+
 /** A group's owning pipeline; groups predating the field default to baidu. */
 export function groupNetdisk(group: FileGroup): string {
     return typeof group.netdisk === "string" && group.netdisk.trim() !== "" ? group.netdisk : "baidu";
@@ -217,6 +234,28 @@ export function emptyGroup(adapter: string): FileGroup {
         group.title = netdiskLabel("baidu");
     }
     return group;
+}
+
+/**
+ * The file list a brand-new row starts with while 挂网盘待办组 is on: one empty
+ * link group per selected pipeline, titled after it. These are work orders for
+ * the netdisk lane — an empty link never travels in a push (productionConfig
+ * filters the group out), so attaching them cannot publish a dead entry.
+ * Null when nothing is selected: a row with no file list at all.
+ */
+export function todoGroupConfig(ids: string[]): FileServeConfig | null {
+    const kept = knownNetdisks(ids);
+    if (kept.length === 0) {
+        return null;
+    }
+    const config: FileServeConfig = {};
+    kept.forEach((id, index) => {
+        const group = emptyGroup("platform");
+        group.netdisk = id;
+        group.title = netdiskLabel(id);
+        config[String(index + 1)] = group;
+    });
+    return config;
 }
 
 /** The production payload for a row: every group that carries its link, with

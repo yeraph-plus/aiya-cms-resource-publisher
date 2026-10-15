@@ -26,7 +26,7 @@ vi.mock("undici", () => ({
 }));
 
 const { uploadImage, WpError } = await import("../server/wp.js");
-const { toBase64, imageTag, insertAtCaret } = await import("../shared/image-upload.js");
+const { toBase64, imageTag, prependImageTags } = await import("../shared/image-upload.js");
 
 const CREDS = { siteUrl: "https://site.test", username: "u", appPassword: "p" };
 
@@ -103,12 +103,20 @@ describe("the content helpers", () => {
         expect(imageTag("https://x.test/a.png")).toBe('<img src="https://x.test/a.png" alt="">');
     });
 
-    it("inserts at the caret and clamps a stale one to the end", () => {
-        expect(insertAtCaret("ab", "<img>", 1)).toBe('a<img>b');
-        expect(insertAtCaret("ab", "<img>", 0)).toBe('<img>ab');
-        expect(insertAtCaret("ab", "<img>", 99)).toBe('ab<img>');
-        expect(insertAtCaret("ab", "<img>", -5)).toBe('<img>ab');
-        expect(insertAtCaret("", "<img>", Number.MAX_SAFE_INTEGER)).toBe('<img>');
+    it("puts the picked images at the very start, in order", () => {
+        expect(prependImageTags("正文", ["https://x.test/a.png"])).toBe(
+            '<img src="https://x.test/a.png" alt="">\n正文',
+        );
+        expect(prependImageTags("正文", ["https://x.test/a.png", "https://x.test/b.png"])).toBe(
+            '<img src="https://x.test/a.png" alt="">\n<img src="https://x.test/b.png" alt="">\n正文',
+        );
+        // Nothing picked changes nothing; an empty body is just the tags.
+        expect(prependImageTags("正文", [])).toBe("正文");
+        expect(prependImageTags("", ["https://x.test/a.png"])).toBe('<img src="https://x.test/a.png" alt="">');
+        // Dropping twice must not stack blank lines above the block.
+        expect(prependImageTags("\n\n正文", ["https://x.test/b.png"])).toBe(
+            '<img src="https://x.test/b.png" alt="">\n正文',
+        );
     });
 });
 

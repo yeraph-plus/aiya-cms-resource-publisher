@@ -84,6 +84,9 @@ export interface SaveSettingsPayload {
     defaultAuthorId?: number | null;
     workRoot?: string;
     dirNameSuffix?: string;
+    newRowStatus?: string;
+    netdiskTodoEnabled?: boolean;
+    netdiskTodoGroups?: string;
 }
 
 export function saveSettings(payload: SaveSettingsPayload): Promise<{ ok: boolean }> {

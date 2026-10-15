@@ -2,7 +2,7 @@
 // @name         AIYA 网盘分享回填（百度）
 // @namespace    aiya-netdisk
 // @version      0.5.5
-// @description  在百度网盘 web 端定位/创建 CA{补零ID} 目录、创建分享并把链接（带 ?pwd=提取码）回填到发帖器文件列表（自动勾选推送）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
+// @description  在百度网盘 web 端定位/创建 CA{补零ID} 目录、创建分享并把链接（带 ?pwd=提取码）回填到发帖器文件列表（只把该行标记为待推送，推送仍需在发帖器窗口点）。上传由网盘客户端完成，本脚本只做「定位 → 分享 → 回填」。
 // @match        https://pan.baidu.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue

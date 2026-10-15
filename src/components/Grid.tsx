@@ -15,6 +15,7 @@ import {
 import type { AuthorDTO, RowDTO, TermInfo } from "../types";
 import { TAXONOMY_ORDER } from "../types";
 import { configSummary } from "../../shared/fileserve";
+import { termPath } from "../../shared/terms";
 import type { RowPatch } from "../api";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -132,7 +133,9 @@ function refsToNames(refs: string[] | undefined, options: TermInfo[] | undefined
                 return `${ref.slice("name:".length)}（新）`;
             }
             const found = options?.find((option) => option.id === Number(ref));
-            return found ? found.name : `#${ref}`;
+            // Full path, so two same-named children of different parents do not
+            // read as the same value; a flat taxonomy's path is just its name.
+            return found ? termPath(found, options ?? []) : `#${ref}`;
         })
         .join("、");
 }

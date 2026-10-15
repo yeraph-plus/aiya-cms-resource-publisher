@@ -16,6 +16,7 @@ import {
     listLogs,
     listPosts,
     listTerms,
+    listTermUsage,
     logEvent,
     parseSnapshot,
     setSetting,
@@ -33,7 +34,17 @@ import { getProgress, setProgress } from "./progress.js";
 import { normalizeSiteUrl, ping, uploadImage, WpError } from "./wp.js";
 import { parseCsv } from "../shared/csv.js";
 import { buildImportRows, guessMapping, TAXONOMY_ORDER, type ImportMapping } from "../shared/import.js";
-import { mergeFileserveDraft, mergeRemoteFileserve, normalizeConfig } from "../shared/fileserve.js";
+import { buildIngestRows, INGEST_MAX_ROWS, type IngestBuildOptions } from "../shared/ingest.js";
+import {
+    mergeFileserveDraft,
+    mergeRemoteFileserve,
+    NETDISK_OPTIONS,
+    normalizeConfig,
+    parseNetdiskTodo,
+    priceDefault,
+    todoGroupConfig,
+} from "../shared/fileserve.js";
+import { termPath, type TermOption } from "../shared/terms.js";
 
 export async function buildApp(): Promise<FastifyInstance> {
     const app = Fastify({ logger: false, bodyLimit: 16 * 1024 * 1024 });
@@ -114,36 +125,56 @@ function errorMessage(error: unknown): string {
     return String(error);
 }
 
-    app.get("/api/state", async () => {
-    const settings = getSettings();
-    const grouped: Record<string, { id: number; name: string; slug: string }[]> = {};
-    for (const term of listTerms()) {
-        (grouped[term.taxonomy] ??= []).push({ id: term.id, name: term.name, slug: term.slug });
-    }
-    // Group terms per taxonomy in the fixed registry order (category first).
-    const terms: Record<string, { id: number; name: string; slug: string }[]> = {};
-    for (const slug of TAXONOMY_ORDER) {
-        if (grouped[slug]) {
-            terms[slug] = grouped[slug] as { id: number; name: string; slug: string }[];
+    /**
+     * The empty-link netdisk work orders every brand-new row starts with, as
+     * the stored JSON string, or null while the setting is off. Empty links are
+     * filtered out of every push (shared/fileserve.ts productionConfig), so
+     * attaching them cannot publish a dead download entry — they only put the
+     * row in the netdisk lane's queue.
+     */
+    const todoFileserve = (): string | null => {
+        const settings = getSettings();
+        if (!settings.netdiskTodoEnabled) {
+            return null;
         }
-    }
+        const config = todoGroupConfig(parseNetdiskTodo(settings.netdiskTodoGroups));
+        return config === null ? null : JSON.stringify(config);
+    };
 
-            return {
-                settings: {
-                    siteUrl: settings.siteUrl,
-                    username: settings.username,
-                    hasPassword: settings.appPassword !== "",
-                    proxyUrl: settings.proxyUrl,
-                    defaultAuthorId: settings.defaultAuthorId,
-                    lastSyncCursor: settings.lastSyncCursor,
-                    workRoot: settings.workRoot,
-                    dirNameSuffix: settings.dirNameSuffix,
-                },
-                authors: listAuthors(),
-                terms,
-                posts: listPosts().map(rowWithTerms),
-            };
-});
+    app.get("/api/state", async () => {
+        const settings = getSettings();
+        const grouped: Record<string, { id: number; name: string; slug: string; parent: number }[]> = {};
+        for (const term of listTerms()) {
+            (grouped[term.taxonomy] ??= []).push({ id: term.id, name: term.name, slug: term.slug, parent: term.parent });
+        }
+        // Group terms per taxonomy in the fixed registry order (category first).
+        const terms: Record<string, { id: number; name: string; slug: string; parent: number }[]> = {};
+        for (const slug of TAXONOMY_ORDER) {
+            const list = grouped[slug];
+            if (list) {
+                terms[slug] = list;
+            }
+        }
+
+        return {
+            settings: {
+                siteUrl: settings.siteUrl,
+                username: settings.username,
+                hasPassword: settings.appPassword !== "",
+                proxyUrl: settings.proxyUrl,
+                defaultAuthorId: settings.defaultAuthorId,
+                lastSyncCursor: settings.lastSyncCursor,
+                workRoot: settings.workRoot,
+                dirNameSuffix: settings.dirNameSuffix,
+                newRowStatus: settings.newRowStatus,
+                netdiskTodoEnabled: settings.netdiskTodoEnabled,
+                netdiskTodoGroups: settings.netdiskTodoGroups,
+            },
+            authors: listAuthors(),
+            terms,
+            posts: listPosts().map(rowWithTerms),
+        };
+    });
 
     app.put("/api/settings", async (request, reply) => {
         const body = request.body as Record<string, unknown>;
@@ -171,6 +202,22 @@ function errorMessage(error: unknown): string {
                 return reply.code(400).send({ error: "目录命名后缀无效。" });
             }
             setSetting("dirNameSuffix", suffix);
+        }
+        if (body.newRowStatus !== undefined) {
+            const status = String(body.newRowStatus);
+            if (!["draft", "publish"].includes(status)) {
+                return reply.code(400).send({ error: "新行默认状态只能是 draft 或 publish。" });
+            }
+            setSetting("newRowStatus", status);
+        }
+        if (body.netdiskTodoEnabled !== undefined) {
+            setSetting("netdiskTodoEnabled", body.netdiskTodoEnabled ? "1" : null);
+        }
+        if (body.netdiskTodoGroups !== undefined) {
+            // Whitelist-filtered, not rejected: the registry is
+            // shared/fileserve.ts's NETDISK_OPTIONS, and a value it does not
+            // know (a pipeline that was renamed or removed) simply disappears.
+            setSetting("netdiskTodoGroups", parseNetdiskTodo(String(body.netdiskTodoGroups ?? "")).join(","));
         }
         return reply.code(200).send({ ok: true });
     });
@@ -205,28 +252,30 @@ function errorMessage(error: unknown): string {
     });
 
     app.post("/api/posts", async (request) => {
-    const body = (request.body ?? {}) as Record<string, unknown>;
-    const settings = getSettings();
-    const localId = insertPost({
-        status: "draft",
-        title: String(body.title ?? "未命名资源"),
-        authorId: settings.defaultAuthorId,
-        dirty: true,
-        lastSyncedGmt: null,
+        const body = (request.body ?? {}) as Record<string, unknown>;
+        const settings = getSettings();
+        const todo = todoFileserve();
+        const localId = insertPost({
+            status: settings.newRowStatus,
+            title: String(body.title ?? "未命名资源"),
+            authorId: settings.defaultAuthorId,
+            dirty: true,
+            lastSyncedGmt: null,
+            ...(todo !== null ? { fileserve: todo } : {}),
+        });
+        // The stored row travels back with the id: the client appends it to the
+        // table instead of refetching every post just to see one new row.
+        const saved = getPost(localId);
+        return { localId, row: saved ? rowWithTerms(saved) : null };
     });
-    // The stored row travels back with the id: the client appends it to the
-    // table instead of refetching every post just to see one new row.
-    const saved = getPost(localId);
-    return { localId, row: saved ? rowWithTerms(saved) : null };
-});
 
     app.put("/api/posts/:id", async (request, reply) => {
-    const localId = Number((request.params as { id: string }).id);
-    const row = getPost(localId);
-    if (!row) {
-        return reply.code(404).send({ error: "本地行不存在。" });
-    }
-    const body = request.body as Record<string, unknown>;
+        const localId = Number((request.params as { id: string }).id);
+        const row = getPost(localId);
+        if (!row) {
+            return reply.code(404).send({ error: "本地行不存在。" });
+        }
+        const body = request.body as Record<string, unknown>;
 
     // fileserve: null = the tool has no data for this row (leave the online
     // meta alone); an object — even an empty one — is the row's whole config,
@@ -427,8 +476,146 @@ function errorMessage(error: unknown): string {
             return reply.code(400).send({ error: built.fatal });
         }
 
-        const localIds = importPosts(built.rows);
+        // Brand-new rows start with the configured netdisk work orders unless
+        // the payload already says what this row carries.
+        const todo = todoFileserve();
+        const localIds = importPosts(
+            built.rows.map((row) => (todo !== null && row.fileserve === undefined ? { ...row, fileserve: todo } : row)),
+        );
         return { imported: localIds.length, failed: built.errors.length, errors: built.errors, localIds };
+    });
+
+    // --- 摄取入口（智能摄取窗口 / 任意本机客户端）-----------------------------
+    // The one fixed entry for structured drafts. An isolated intake process, a
+    // script, or a hand-written payload all land here. No model, no prompt and
+    // no key lives in this process: the row semantics are the publishing
+    // tool's own, and a row arrives dirty in the push queue exactly like a CSV
+    // import. /preview runs the same pure builder without writing, so a client
+    // can show what the write would do before committing to it.
+    const ingestOptions = (): IngestBuildOptions => {
+        const settings = getSettings();
+        const usage = listTermUsage();
+        const termOptions: Record<string, TermOption[]> = {};
+        for (const term of listTerms()) {
+            (termOptions[term.taxonomy] ??= []).push({
+                id: term.id,
+                name: term.name,
+                slug: term.slug,
+                parent: term.parent,
+            });
+        }
+        // Most-used first, and the same order the context route publishes: a
+        // name that exists under several parents (WP allows it) folds to the
+        // term this site actually uses, instead of whichever came first
+        // alphabetically.
+        for (const [taxonomy, list] of Object.entries(termOptions)) {
+            termOptions[taxonomy] = [...list].sort(
+                (a, b) =>
+                    (usage.get(`${taxonomy}:${b.id}`) ?? 0) - (usage.get(`${taxonomy}:${a.id}`) ?? 0) ||
+                    a.name.localeCompare(b.name, "zh"),
+            );
+        }
+        return {
+            authors: listAuthors().map((author) => ({ id: author.id, name: author.name })),
+            termOptions,
+            defaultStatus: settings.newRowStatus,
+            defaultAuthorId: settings.defaultAuthorId,
+            defaultFileserve: todoFileserve(),
+        };
+    };
+
+    // What an intake client needs to build a payload, without the 2 MB of every
+    // row's content: terms carry their usage count so a prompt can say "prefer
+    // what the site already uses", their parent path so 分类 can be shown as a
+    // tree, and the target site rides along so the client can show where the
+    // rows are about to land.
+    app.get("/api/ingest/context", async () => {
+        const settings = getSettings();
+        const usage = listTermUsage();
+        const todoIds = parseNetdiskTodo(settings.netdiskTodoGroups);
+        const grouped: Record<string, { id: number; name: string; slug: string; parent: number; count: number }[]> = {};
+        for (const term of listTerms()) {
+            (grouped[term.taxonomy] ??= []).push({
+                id: term.id,
+                name: term.name,
+                slug: term.slug,
+                parent: term.parent,
+                count: usage.get(`${term.taxonomy}:${term.id}`) ?? 0,
+            });
+        }
+        const terms: Record<string, (TermOption & { count: number; path: string })[]> = {};
+        for (const slug of TAXONOMY_ORDER) {
+            const list = grouped[slug];
+            if (list) {
+                // Most-used first: that is the order the prompt and the
+                // checkbox list want, and the count is why it exists. The path
+                // is what tells two same-named children apart.
+                const sorted = [...list].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh"));
+                terms[slug] = sorted.map((term) => ({ ...term, path: termPath(term, sorted) }));
+            }
+        }
+        return {
+            siteUrl: settings.siteUrl,
+            lastSyncCursor: settings.lastSyncCursor,
+            defaultAuthorId: settings.defaultAuthorId,
+            defaultStatus: settings.newRowStatus,
+            proxyUrl: settings.proxyUrl,
+            authors: listAuthors(),
+            terms,
+            netdiskOptions: NETDISK_OPTIONS,
+            netdiskTodo: {
+                enabled: settings.netdiskTodoEnabled && todoIds.length > 0,
+                groups: NETDISK_OPTIONS.filter((option) => todoIds.includes(option.id)),
+            },
+            priceDefault: priceDefault("platform"),
+            ingestMaxRows: INGEST_MAX_ROWS,
+        };
+    });
+
+    app.post("/api/ingest/preview", async (request, reply) => {
+        const body = (request.body ?? {}) as { rows?: unknown };
+        const built = buildIngestRows(body.rows, ingestOptions());
+        if (built.fatal !== null) {
+            return reply.code(400).send({ error: built.fatal });
+        }
+        return {
+            count: built.rows.length,
+            // Term refs read back as what they will become: an id here means a
+            // known term, `name:` means "created on push".
+            rows: built.rows.map((row) => ({
+                status: row.status,
+                title: row.title,
+                content: row.content,
+                authorId: row.authorId,
+                dateLocal: row.dateLocal,
+                terms: row.termRefs,
+                fileserve: row.fileserve === null ? null : parseFileserve(row.fileserve),
+            })),
+            errors: built.errors,
+            warnings: built.warnings,
+        };
+    });
+
+    app.post("/api/ingest", async (request, reply) => {
+        const body = (request.body ?? {}) as { rows?: unknown; source?: unknown };
+        const built = buildIngestRows(body.rows, ingestOptions());
+        if (built.fatal !== null) {
+            return reply.code(400).send({ error: built.fatal });
+        }
+        const localIds = importPosts(built.rows);
+        const source =
+            typeof body.source === "string" && body.source.trim() !== "" ? body.source.trim().slice(0, 32) : "未署名";
+        localIds.forEach((localId, index) => {
+            logEvent("info", "摄取", `${built.rows[index]?.title ?? "（无标题）"}：已入队，待推送`, localId);
+        });
+        for (const failure of built.errors) {
+            logEvent("warn", "摄取", `${failure.title}：${failure.error}`);
+        }
+        for (const note of built.warnings) {
+            logEvent("warn", "摄取", `${note.title}：${note.warning}`);
+        }
+        logEvent("info", "摄取", `摄取结束：新增 ${localIds.length} 行，失败 ${built.errors.length} 行（来源 ${source}）`);
+        return { imported: localIds.length, localIds, errors: built.errors, warnings: built.warnings };
     });
 
     // Pull and push own the site link and the progress slot; they must not
@@ -580,9 +767,12 @@ function errorMessage(error: unknown): string {
     };
 
     // How an open client hears that the lane filled a link behind its back.
-    // Same-origin only (no CORS header here): the app polls it, the userscript
-    // never does. The whole row travels with it — the client splices single
-    // rows, so no second round trip is needed to see the filled link.
+    // The app polls it and the userscript never does, so no CORS header is sent
+    // here: a browser only lets a page read a cross-origin response when that
+    // header allows it, while the local-only guard above is what refuses the
+    // cross-site request before it arrives. The whole row travels with the
+    // answer — the client splices single rows, so no second round trip is
+    // needed to see the filled link.
     app.get("/api/netdisk/applied", async (request) => {
         const query = request.query as { after?: string };
         const after = Number(query.after ?? "0");

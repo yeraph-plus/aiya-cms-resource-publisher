@@ -120,6 +120,23 @@ export default function App() {
         void refresh();
     }, [refresh]);
 
+    // A file dropped anywhere outside the detail panel's zone makes the browser
+    // navigate to that file, which throws the whole app away mid-edit. Only the
+    // zone handles drops; everywhere else they are swallowed.
+    useEffect(() => {
+        const swallow = (event: DragEvent) => {
+            if (event.dataTransfer?.types.includes("Files")) {
+                event.preventDefault();
+            }
+        };
+        window.addEventListener("dragover", swallow);
+        window.addEventListener("drop", swallow);
+        return () => {
+            window.removeEventListener("dragover", swallow);
+            window.removeEventListener("drop", swallow);
+        };
+    }, []);
+
     // The netdisk userscript writes share links into the database from the
     // pan.baidu.com page. Nothing in this tab hears about that on its own, so
     // the row kept showing an empty link and a stale 可补 badge — and the detail
@@ -341,6 +358,14 @@ export default function App() {
                     </button>
                     <button className="btn" disabled={busy} onClick={() => setImportOpen(true)}>
                         导入 CSV
+                    </button>
+                    <button
+                        className="btn"
+                        disabled={busy}
+                        title="打开独立的智能摄取窗口（需先 npm run intake）：原始语料 → 结构化草稿 → 入队"
+                        onClick={() => window.open("http://127.0.0.1:5180", "_blank", "noopener")}
+                    >
+                        智能摄取
                     </button>
                 </span>
                 <span className="pl-2 border-l border-neutral-200 flex items-center gap-2">

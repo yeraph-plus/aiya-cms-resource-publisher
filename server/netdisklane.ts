@@ -1,9 +1,10 @@
 /**
  * The netdisk share lane: a userscript running on pan.baidu.com locates the
- * staging-named folder the user uploaded via the netdisk client, creates the
- * share in-page, and posts url+code back here. Queue items are the row's
- * platform groups with an empty link; a result fills the group and flags it
- * for push. No new tables, no new settings — the queue is derived and the
+ * CA{padded post id} folder the user uploaded into with the netdisk client
+ * (creating it when it is missing), makes the share in-page, and posts url+code
+ * back here. Queue items are the row's platform groups with an empty link; a
+ * result fills the group and marks the row dirty, so the link goes out with the
+ * next push. No new tables, no new settings — the queue is derived and the
  * write-back rides the existing row semantics.
  */
 
@@ -21,7 +22,9 @@ export interface QueueItem {
     postId: number;
     groupId: string;
     netdisk: string;
-    /** The staged folder's name in the netdisk (00501-标题). */
+    /** The tool's staged folder name (000501-标题, per the 目录命名 setting).
+     *  The 百度 userscript overwrites it with its own CA{padded id} form before
+     *  using it, so netdisk-side this is a label, not the folder's name. */
     dirName: string;
     title: string;
     groupTitle: string;

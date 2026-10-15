@@ -3,13 +3,16 @@ import {
     ADAPTER_FIELDS,
     configSummary,
     emptyGroup,
+    knownNetdisks,
     mergeFileserveDraft,
     mergeRemoteFileserve,
     nextId,
     normalizeConfig,
+    parseNetdiskTodo,
     priceDefault,
     productionConfig,
     sanitizeId,
+    todoGroupConfig,
 } from "../shared/fileserve.js";
 
 /**
@@ -223,5 +226,35 @@ describe("fileserve model", () => {
         // (deletion propagates), the empty one is pending lane work (stays).
         const merged = JSON.parse(mergeRemoteFileserve(null, local)!);
         expect(Object.keys(merged)).toEqual(["2"]);
+    });
+});
+
+/**
+ * 挂网盘待办组: the new-row default. The rows it builds are the netdisk lane's
+ * work orders, so the shape has to be the one buildQueue claims.
+ */
+describe("netdisk todo groups", () => {
+    it("whitelists stored ids, keeping order and dropping repeats and strangers", () => {
+        expect(parseNetdiskTodo("baidu,quark")).toEqual(["baidu", "quark"]);
+        expect(parseNetdiskTodo("quark baidu, quark")).toEqual(["quark", "baidu"]);
+        expect(parseNetdiskTodo("mega,baidu")).toEqual(["baidu"]);
+        expect(parseNetdiskTodo("")).toEqual([]);
+        expect(parseNetdiskTodo(null)).toEqual([]);
+        expect(knownNetdisks([" baidu ", "quark"])).toEqual(["baidu", "quark"]);
+    });
+
+    it("builds one empty-link group per pipeline, titled and priced", () => {
+        const config = todoGroupConfig(["baidu", "quark"])!;
+        expect(Object.keys(config)).toEqual(["1", "2"]);
+        expect(config["1"]).toMatchObject({ adapter: "platform", netdisk: "baidu", title: "百度网盘", price: 2, url: "", code: "" });
+        expect(config["2"]).toMatchObject({ adapter: "platform", netdisk: "quark", title: "夸克网盘", price: 2 });
+    });
+
+    it("is null when nothing is selected, and its groups never reach the site", () => {
+        expect(todoGroupConfig([])).toBeNull();
+        expect(todoGroupConfig(["mega"])).toBeNull();
+        // Empty links are stripped on push, so a fresh row carrying these
+        // cannot publish a dead download entry.
+        expect(productionConfig(todoGroupConfig(["baidu"])!)).toEqual({});
     });
 });

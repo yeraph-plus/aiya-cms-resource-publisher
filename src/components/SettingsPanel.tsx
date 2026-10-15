@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../api";
 import type { StateDTO } from "../types";
+import { NETDISK_OPTIONS, parseNetdiskTodo } from "../../shared/fileserve";
 
 interface Props {
     state: StateDTO;
@@ -16,7 +17,14 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
     const [defaultAuthorId, setDefaultAuthorId] = useState<number | null>(state.settings.defaultAuthorId);
     const [workRoot, setWorkRoot] = useState(state.settings.workRoot);
     const [dirNameSuffix, setDirNameSuffix] = useState(state.settings.dirNameSuffix);
+    const [newRowStatus, setNewRowStatus] = useState(state.settings.newRowStatus);
+    const [netdiskTodoEnabled, setNetdiskTodoEnabled] = useState(state.settings.netdiskTodoEnabled);
+    const [netdiskTodo, setNetdiskTodo] = useState<string[]>(parseNetdiskTodo(state.settings.netdiskTodoGroups));
     const [busy, setBusy] = useState(false);
+
+    const toggleNetdisk = (id: string) => {
+        setNetdiskTodo((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+    };
 
     useEffect(() => {
         const onKey = (event: KeyboardEvent) => {
@@ -36,6 +44,9 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
         defaultAuthorId,
         workRoot,
         dirNameSuffix,
+        newRowStatus,
+        netdiskTodoEnabled,
+        netdiskTodoGroups: netdiskTodo.join(","),
     });
 
     const save = async () => {
@@ -141,6 +152,38 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
                     </select>
                     <span className="col-span-2 text-xs text-neutral-500">
                         只作用于本地暂存目录：ID-SLUG 取线上 permalink 末段，没有 slug 的行回落标题（历史行要重新同步才会有 slug）。网盘目录由油猴脚本固定用 CA+补零6位ID，不跟随这里。
+                    </span>
+
+                    <label className="text-right text-neutral-500">新行默认状态</label>
+                    <select value={newRowStatus} onChange={(event) => setNewRowStatus(event.target.value)}>
+                        <option value="draft">草稿（先入队，等网盘回填再一起推送）</option>
+                        <option value="publish">发布（推送时直接发布）</option>
+                    </select>
+
+                    <label className="text-right text-neutral-500">挂网盘待办组</label>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                        <label className="inline-flex items-center gap-1 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={netdiskTodoEnabled}
+                                onChange={(event) => setNetdiskTodoEnabled(event.target.checked)}
+                            />
+                            <span>新建行自动挂上</span>
+                        </label>
+                        {NETDISK_OPTIONS.map((option) => (
+                            <label key={option.id} className="inline-flex items-center gap-1 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={netdiskTodo.includes(option.id)}
+                                    disabled={!netdiskTodoEnabled}
+                                    onChange={() => toggleNetdisk(option.id)}
+                                />
+                                <span>{option.label}</span>
+                            </label>
+                        ))}
+                    </div>
+                    <span className="col-span-2 text-xs text-neutral-500">
+                        只挂「空链接」的网盘组，不随推送上行——推送会过滤掉空链接组，所以不会发出无效下载项；等网盘脚本回填后由你在表格里点推送。覆盖 智能摄取 入队、CSV 导入 与「新建行」三条新建路径。
                     </span>
                 </div>
 

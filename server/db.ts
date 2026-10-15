@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS terms (
     term_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     slug TEXT NOT NULL,
+    parent INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (taxonomy, term_id)
 );
 CREATE TABLE IF NOT EXISTS posts (
@@ -68,9 +69,19 @@ CREATE TABLE IF NOT EXISTS logs (
 // Databases from before slug capture lack the column; the guarded ALTER is
 // the whole migration. (fileserve_pushed_digest was retired with the
 // per-group push-badge redesign; existing columns stay inert.)
-const postColumns = (db.pragma("table_info(posts)") as { name: string }[]).map((column) => column.name);
-if (!postColumns.includes("slug")) {
+function columnsOf(table: string): string[] {
+    return (db.pragma(`table_info(${table})`) as { name: string }[]).map((column) => column.name);
+}
+
+if (!columnsOf("posts").includes("slug")) {
     db.exec("ALTER TABLE posts ADD COLUMN slug TEXT");
+}
+
+// The taxonomy tree arrived with hierarchical 分类 support: an older database
+// gets the column filled as 0 (flat) and picks the real parents up on the next
+// sync, so nothing has to be re-imported by hand.
+if (!columnsOf("terms").includes("parent")) {
+    db.exec("ALTER TABLE terms ADD COLUMN parent INTEGER NOT NULL DEFAULT 0");
 }
 
 export function getSetting(key: string): string | null {
@@ -96,6 +107,13 @@ export interface SettingsShape {
     workRoot: string;
     /** What follows the padded post id in a staged folder's name. */
     dirNameSuffix: string;
+    /** Status a row created without an explicit one gets (摄取/CSV/新建行). */
+    newRowStatus: string;
+    /** Attach the selected netdisk pipelines as empty-link work orders to every
+     * brand-new row; the pipelines themselves live in netdiskTodoGroups. */
+    netdiskTodoEnabled: boolean;
+    /** Comma-joined pipeline ids from NETDISK_OPTIONS ("baidu,quark"). */
+    netdiskTodoGroups: string;
 }
 
 export function getSettings(): SettingsShape {
@@ -108,6 +126,9 @@ export function getSettings(): SettingsShape {
         lastSyncCursor: getSetting("lastSyncCursor"),
         workRoot: getSetting("workRoot") ?? "",
         dirNameSuffix: getSetting("dirNameSuffix") ?? "title",
+        newRowStatus: getSetting("newRowStatus") === "publish" ? "publish" : "draft",
+        netdiskTodoEnabled: getSetting("netdiskTodoEnabled") === "1",
+        netdiskTodoGroups: getSetting("netdiskTodoGroups") ?? "",
     };
 }
 
@@ -299,7 +320,7 @@ export function deletePost(localId: number): void {
     db.prepare("DELETE FROM posts WHERE local_id = ?").run(localId);
 }
 
-/** The shape CSV import builds; every row lands dirty so it joins the push queue. */
+/** The shape CSV import and the ingest contract build; every row lands dirty so it joins the push queue. */
 export interface ImportedRow {
     status: string;
     title: string;
@@ -307,6 +328,8 @@ export interface ImportedRow {
     authorId: number | null;
     dateLocal: string;
     termRefs: Record<string, string[]>;
+    /** The ingest contract's file list; CSV import never carries one. */
+    fileserve?: string | null;
 }
 
 /** All-or-nothing bulk create: one transaction writes every imported row (and its term refs). */
@@ -322,6 +345,7 @@ export function importPosts(rows: ImportedRow[]): number[] {
                 dateLocal: row.dateLocal,
                 dirty: true,
                 lastSyncedGmt: null,
+                ...(row.fileserve !== undefined ? { fileserve: row.fileserve } : {}),
             });
             if (Object.keys(row.termRefs).length > 0) {
                 setTermRefs(localId, row.termRefs);
@@ -362,26 +386,39 @@ export function setTermRefs(localId: number, terms: Record<string, string[]>): v
 export interface WpTaxonomyInfo {
     slug: string;
     hierarchical: boolean;
-    terms: { id: number; name: string; slug: string; count: number }[];
+    terms: { id: number; name: string; slug: string; parent?: number; count: number }[];
 }
 
 export function replaceTerms(taxonomies: WpTaxonomyInfo[]): void {
     const replace = db.transaction((list: WpTaxonomyInfo[]) => {
         db.prepare("DELETE FROM terms").run();
-        const insert = db.prepare("INSERT INTO terms (taxonomy, term_id, name, slug) VALUES (?, ?, ?, ?)");
+        const insert = db.prepare("INSERT INTO terms (taxonomy, term_id, name, slug, parent) VALUES (?, ?, ?, ?, ?)");
         for (const taxonomy of list) {
             for (const term of taxonomy.terms) {
-                insert.run(taxonomy.slug, term.id, term.name, term.slug);
+                insert.run(taxonomy.slug, term.id, term.name, term.slug, term.parent ?? 0);
             }
         }
     });
     replace(taxonomies);
 }
 
-export function listTerms(): { taxonomy: string; id: number; name: string; slug: string }[] {
+export function listTerms(): { taxonomy: string; id: number; name: string; slug: string; parent: number }[] {
     return db
-        .prepare("SELECT taxonomy, term_id AS id, name, slug FROM terms ORDER BY taxonomy, name")
-        .all() as { taxonomy: string; id: number; name: string; slug: string }[];
+        .prepare("SELECT taxonomy, term_id AS id, name, slug, parent FROM terms ORDER BY taxonomy, name")
+        .all() as { taxonomy: string; id: number; name: string; slug: string; parent: number }[];
+}
+
+/**
+ * How often each known term id is referenced by the local rows, keyed
+ * "taxonomy:term_id". This is the ingest vocabulary's usefulness ranking: the
+ * intake prompt tells the model to prefer what the site already uses, and a
+ * `name:` reference is not an id, so it is skipped by the glob.
+ */
+export function listTermUsage(): Map<string, number> {
+    const rows = db
+        .prepare("SELECT taxonomy, ref, COUNT(*) AS count FROM post_terms WHERE ref GLOB '[0-9]*' GROUP BY taxonomy, ref")
+        .all() as { taxonomy: string; ref: string; count: number }[];
+    return new Map(rows.map((row) => [`${row.taxonomy}:${row.ref}`, Number(row.count)]));
 }
 
 export function upsertAuthor(id: number, name: string): void {

@@ -1,0 +1,878 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>智能摄取 · 发帖器</title>
+        <style>
+            :root {
+                --line: #d4d4d8;
+                --ink: #27272a;
+                --dim: #71717a;
+                --bg: #fafafa;
+                --accent: #2563eb;
+            }
+            * {
+                box-sizing: border-box;
+            }
+            body {
+                margin: 0;
+                font:
+                    13px/1.5 "Segoe UI",
+                    "Microsoft YaHei",
+                    system-ui,
+                    sans-serif;
+                color: var(--ink);
+                background: var(--bg);
+            }
+            button,
+            input,
+            select,
+            textarea {
+                font: inherit;
+                color: inherit;
+                border: 1px solid var(--line);
+                border-radius: 4px;
+                padding: 3px 8px;
+                background: #fff;
+            }
+            textarea {
+                width: 100%;
+                resize: vertical;
+                padding: 6px 8px;
+                font-family: ui-monospace, Consolas, monospace;
+                font-size: 12px;
+            }
+            button {
+                cursor: pointer;
+            }
+            button:disabled {
+                opacity: 0.45;
+                cursor: not-allowed;
+            }
+            button.primary {
+                background: var(--accent);
+                border-color: var(--accent);
+                color: #fff;
+            }
+            button.ghost {
+                border-color: transparent;
+                background: transparent;
+                color: var(--dim);
+            }
+            header {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 8px 12px;
+                background: #fff;
+                border-bottom: 1px solid var(--line);
+                position: sticky;
+                top: 0;
+                z-index: 5;
+            }
+            header strong {
+                font-size: 14px;
+            }
+            .pill {
+                padding: 2px 8px;
+                border-radius: 999px;
+                background: #eff6ff;
+                color: #1d4ed8;
+                font-size: 12px;
+            }
+            .pill.warn {
+                background: #fef3c7;
+                color: #b45309;
+            }
+            .grow {
+                margin-left: auto;
+            }
+            main {
+                display: grid;
+                grid-template-columns: minmax(320px, 1fr) minmax(240px, 0.7fr) minmax(420px, 1.4fr);
+                gap: 12px;
+                padding: 12px;
+                align-items: start;
+            }
+            @media (max-width: 1200px) {
+                main {
+                    grid-template-columns: 1fr;
+                }
+            }
+            section {
+                background: #fff;
+                border: 1px solid var(--line);
+                border-radius: 6px;
+                padding: 10px 12px;
+                min-width: 0;
+            }
+            h2 {
+                font-size: 13px;
+                margin: 0 0 8px;
+                color: var(--dim);
+                font-weight: 600;
+            }
+            .row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                flex-wrap: wrap;
+                margin-bottom: 6px;
+            }
+            .row.between {
+                justify-content: space-between;
+            }
+            .lbl {
+                display: block;
+                font-size: 11px;
+                color: var(--dim);
+                margin: 6px 0 2px;
+            }
+            .hint {
+                font-size: 11px;
+                color: var(--dim);
+                margin: 4px 0;
+            }
+            #corpus {
+                height: 220px;
+            }
+            #content {
+                height: 240px;
+            }
+            #raw {
+                max-height: 220px;
+                overflow: auto;
+                font-size: 11px;
+                background: #f4f4f5;
+                border-radius: 4px;
+                padding: 6px;
+                white-space: pre-wrap;
+            }
+            .terms {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+                gap: 8px;
+                margin-top: 8px;
+            }
+            .tax {
+                border: 1px solid var(--line);
+                border-radius: 4px;
+                padding: 6px;
+                min-width: 0;
+            }
+            .tax > .tax-head {
+                font-size: 11px;
+                color: var(--dim);
+                display: flex;
+                justify-content: space-between;
+            }
+            .tax .list {
+                max-height: 130px;
+                overflow: auto;
+                margin-top: 4px;
+            }
+            .tax label {
+                display: block;
+                font-size: 12px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                cursor: pointer;
+            }
+            .tax .count {
+                color: #a1a1aa;
+                font-size: 10px;
+            }
+            .tax input.new + span {
+                color: #b45309;
+            }
+            .chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                background: #fef3c7;
+                color: #92400e;
+                border-radius: 999px;
+                padding: 1px 8px;
+                font-size: 11px;
+                margin: 2px 4px 2px 0;
+            }
+            .chip button {
+                border: none;
+                background: transparent;
+                padding: 0;
+                color: inherit;
+            }
+            .msg {
+                border-left: 3px solid var(--line);
+                padding: 4px 8px;
+                margin-top: 6px;
+                font-size: 12px;
+                white-space: pre-wrap;
+            }
+            .msg.ok {
+                border-color: #16a34a;
+                background: #f0fdf4;
+            }
+            .msg.err {
+                border-color: #dc2626;
+                background: #fef2f2;
+            }
+            .msg.info {
+                border-color: var(--accent);
+                background: #eff6ff;
+            }
+            .msg.warn {
+                border-color: #d97706;
+                background: #fffbeb;
+            }
+            .config-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+                gap: 8px;
+            }
+            .config-grid textarea {
+                height: 150px;
+            }
+            section.wide {
+                grid-column: 1 / -1;
+            }
+            .hidden {
+                display: none !important;
+            }
+            .spinner {
+                display: inline-block;
+                width: 12px;
+                height: 12px;
+                border: 2px solid var(--line);
+                border-top-color: var(--accent);
+                border-radius: 50%;
+                animation: spin 0.7s linear infinite;
+                vertical-align: -2px;
+            }
+            @keyframes spin {
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <strong>智能摄取</strong>
+            <span id="target" class="pill">读取中…</span>
+            <span id="busy" class="hidden"><span class="spinner"></span></span>
+            <span class="grow"></span>
+            <span id="proxyInfo" class="hint"></span>
+            <span id="templateCount" class="hint"></span>
+        </header>
+
+        <main>
+            <section class="wide">
+                <h2>配置 · 发帖器与模型</h2>
+                <div class="config-grid">
+                    <label>
+                        <span class="lbl">发帖器地址（摄取端点所在）</span>
+                        <input id="publisherUrl" placeholder="http://127.0.0.1:5175" />
+                    </label>
+                    <label>
+                        <span class="lbl">协议</span>
+                        <select id="provider">
+                            <option value="openai">OpenAI 兼容（/chat/completions）</option>
+                            <option value="gemini">Gemini（generateContent）</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span class="lbl">接口地址（留空用官方默认）</span>
+                        <input id="baseUrl" placeholder="https://api.deepseek.com/v1" />
+                    </label>
+                    <label>
+                        <span class="lbl">模型名</span>
+                        <input id="model" placeholder="deepseek-chat / gemini-2.5-pro" />
+                    </label>
+                    <label>
+                        <span class="lbl">API 密钥（留空表示不改）</span>
+                        <input id="apiKey" type="password" placeholder="已保存" />
+                    </label>
+                    <label>
+                        <span class="lbl">temperature</span>
+                        <input id="temperature" type="number" min="0" max="2" step="0.1" />
+                    </label>
+                </div>
+                <div class="row" style="margin-top: 8px">
+                    <label class="hint">
+                        <input id="usePublisherProxy" type="checkbox" />
+                        共用发帖器的出网代理（关掉 = 直连）
+                    </label>
+                    <label class="hint"><input id="jsonMode" type="checkbox" /> 要求 JSON 模式（不支持时自动退回普通模式）</label>
+                    <button id="saveConfig" class="primary">保存配置</button>
+                    <span id="proxyNote" class="hint"></span>
+                </div>
+
+                <h2 style="margin-top: 12px">提示词模板（可按内容类型切换）</h2>
+                <div class="row">
+                    <select id="editTemplate"></select>
+                    <input id="editLabel" placeholder="名称" style="width: 120px" />
+                    <input id="editHint" placeholder="索引来源提示" style="flex: 1; min-width: 200px" />
+                    <button id="saveTemplate">保存模板</button>
+                </div>
+                <textarea id="editPrompt"></textarea>
+                <p class="hint">模板保存在 intake.config.json；删掉该文件即可恢复内置模板。提示词里请保留 JSON 输出契约，否则结果无法解析。</p>
+            </section>
+
+            <section>
+                <h2>1 · 原始语料</h2>
+                <div class="row between">
+                    <select id="template" style="flex: 1"></select>
+                    <button id="generate" class="primary">生成草稿</button>
+                </div>
+                <p id="sourceHint" class="hint"></p>
+                <textarea id="corpus" placeholder="把商店页 / 论坛帖 / 说明书 / 目录页整段贴进来，越原始越好。"></textarea>
+                <p id="applyInfo" class="hint"></p>
+            </section>
+
+            <section>
+                <h2>2 · 草稿与标签</h2>
+                <span class="lbl">标题</span>
+                <input id="title" style="width: 100%" />
+                <span class="lbl">正文（HTML）</span>
+                <textarea id="content"></textarea>
+                <div class="terms" id="terms"></div>
+                <div id="extras" style="margin-top: 8px"></div>
+                <div class="row" style="margin-top: 8px">
+                    <button id="preview">校验（不入队）</button>
+                    <button id="publish" class="primary">确认入队</button>
+                    <button id="reset">清空</button>
+                    <button id="rawToggle" class="ghost">模型原始返回</button>
+                </div>
+                <pre id="raw" class="hidden"></pre>
+                <div id="messages"></div>
+            </section>
+        </main>
+
+        <script>
+            const TAXONOMIES = [
+                "resource_category",
+                "resource_original",
+                "resource_character",
+                "resource_author",
+                "resource_content",
+                "resource_other",
+            ];
+            const LABELS = {
+                resource_category: "分类",
+                resource_original: "原作",
+                resource_character: "角色",
+                resource_author: "作者",
+                resource_content: "内容描述",
+                resource_other: "其他",
+            };
+
+            const $ = (id) => document.getElementById(id);
+            let config = null;
+            let context = null;
+            /** taxonomy -> Set(term id) the user has ticked. */
+            let picked = {};
+            /** taxonomy -> [name] model words outside the vocabulary (created on push). */
+            let extras = {};
+
+            function say(kind, text) {
+                const box = document.createElement("div");
+                box.className = "msg " + kind;
+                box.textContent = text;
+                $("messages").prepend(box);
+            }
+            function clearMessages() {
+                $("messages").innerHTML = "";
+            }
+            function busy(on) {
+                $("busy").classList.toggle("hidden", !on);
+                for (const id of ["generate", "preview", "publish", "saveConfig", "saveTemplate"]) {
+                    $(id).disabled = on;
+                }
+            }
+            async function api(path, options) {
+                const response = await fetch(path, options);
+                const text = await response.text();
+                let body = null;
+                try {
+                    body = text === "" ? null : JSON.parse(text);
+                } catch {
+                    throw new Error("返回了非 JSON 内容：" + text.slice(0, 200));
+                }
+                if (!response.ok) {
+                    throw new Error((body && body.error) || "HTTP " + response.status);
+                }
+                return body;
+            }
+            function post(path, payload) {
+                return api(path, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+            }
+
+            // ---- boot --------------------------------------------------------
+            async function boot() {
+                try {
+                    config = await api("/api/config");
+                } catch (error) {
+                    say("err", "读配置失败：" + error.message);
+                    return;
+                }
+                renderConfig();
+                renderTemplates();
+                await loadContext();
+            }
+
+            async function loadContext() {
+                try {
+                    context = await api("/api/publisher/context");
+                } catch (error) {
+                    $("target").textContent = "发帖器未连接";
+                    $("target").className = "pill warn";
+                    say("err", "读发帖器上下文失败：" + error.message + "（先启动发帖器，或在上方配置里改地址）");
+                    return;
+                }
+                const site = (context.siteUrl || "").trim();
+                $("target").textContent = site === "" ? "发帖器还没配站点地址" : "目标站点 " + site;
+                $("target").className = "pill" + (site === "" ? " warn" : "");
+                $("templateCount").textContent =
+                    "词表 " + TAXONOMIES.reduce((total, tax) => total + ((context.terms[tax] || []).length), 0) + " 词 · 上限 " + context.ingestMaxRows + " 行/次";
+                renderProxyInfo();
+                renderApplyInfo();
+                renderTerms();
+            }
+
+            /** What the publishing tool will do to this row, from its own settings. */
+            function renderApplyInfo() {
+                if (!context) {
+                    return;
+                }
+                const author = (context.authors || []).find((item) => item.id === context.defaultAuthorId);
+                const status = context.defaultStatus === "publish" ? "发布" : "草稿";
+                const todo = context.netdiskTodo || { enabled: false, groups: [] };
+                const groups = (todo.groups || []).map((item) => item.label).join("、");
+                const parts = [
+                    "入队后按发帖器设置：状态 " + status,
+                    "发布者 " + (author ? author.name : "站点当前账号"),
+                    "时间 留空",
+                    todo.enabled && groups !== "" ? "网盘待办组 " + groups + "（空链接，等回填）" : "不挂网盘待办组",
+                ];
+                $("applyInfo").textContent = parts.join(" · ") + "。图片与封面在主发帖器里处理。";
+            }
+
+            /** Sharing is on by default; the address itself lives in the tool. */
+            function renderProxyInfo() {
+                const shared = !config || config.llm.usePublisherProxy;
+                const proxyUrl = context && typeof context.proxyUrl === "string" ? context.proxyUrl.trim() : "";
+                $("proxyInfo").textContent = shared
+                    ? proxyUrl === ""
+                        ? "模型走直连（发帖器未设代理）"
+                        : "模型共用发帖器代理 " + proxyUrl
+                    : "模型走直连";
+                $("proxyNote").textContent = shared
+                    ? proxyUrl === ""
+                        ? "发帖器的 HTTP 代理为空，等同直连。"
+                        : "用发帖器设置里的代理：" + proxyUrl
+                    : "已关闭共用：不读发帖器的代理，直接连模型接口。";
+            }
+
+            // ---- templates and config ---------------------------------------
+            function renderTemplates() {
+                for (const [selectId, keep] of [
+                    ["template", $("template").value],
+                    ["editTemplate", $("editTemplate").value],
+                ]) {
+                    const select = $(selectId);
+                    select.innerHTML = "";
+                    for (const template of config.templates) {
+                        const option = document.createElement("option");
+                        option.value = template.id;
+                        option.textContent = template.label;
+                        select.append(option);
+                    }
+                    if (keep && config.templates.some((template) => template.id === keep)) {
+                        select.value = keep;
+                    }
+                }
+                showSourceHint();
+                loadTemplateEditor();
+            }
+
+            function currentTemplate() {
+                return config.templates.find((template) => template.id === $("template").value) || config.templates[0];
+            }
+            function showSourceHint() {
+                const template = currentTemplate();
+                $("sourceHint").textContent = template ? "索引来源：" + template.sourceHint : "";
+            }
+            function loadTemplateEditor() {
+                const template = config.templates.find((item) => item.id === $("editTemplate").value) || config.templates[0];
+                if (!template) {
+                    return;
+                }
+                $("editLabel").value = template.label;
+                $("editHint").value = template.sourceHint;
+                $("editPrompt").value = template.prompt;
+            }
+
+            function renderConfig() {
+                $("publisherUrl").value = config.publisherUrl;
+                $("provider").value = config.llm.provider;
+                $("baseUrl").value = config.llm.baseUrl;
+                $("model").value = config.llm.model;
+                $("apiKey").value = "";
+                $("apiKey").placeholder = config.llm.hasApiKey ? "已保存（留空不改）" : "还没配置";
+                $("usePublisherProxy").checked = config.llm.usePublisherProxy;
+                $("temperature").value = config.llm.temperature;
+                $("jsonMode").checked = config.llm.jsonMode;
+                renderProxyInfo();
+            }
+
+            async function saveConfig() {
+                busy(true);
+                try {
+                    config = await api("/api/config", {
+                        method: "PUT",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({
+                            publisherUrl: $("publisherUrl").value,
+                            llm: {
+                                provider: $("provider").value,
+                                baseUrl: $("baseUrl").value,
+                                model: $("model").value,
+                                apiKey: $("apiKey").value,
+                                usePublisherProxy: $("usePublisherProxy").checked,
+                                temperature: Number($("temperature").value),
+                                jsonMode: $("jsonMode").checked,
+                            },
+                        }),
+                    });
+                    renderConfig();
+                    renderTemplates();
+                    say("ok", "配置已保存。");
+                    await loadContext();
+                } catch (error) {
+                    say("err", "保存配置失败：" + error.message);
+                } finally {
+                    busy(false);
+                }
+            }
+
+            async function saveTemplate() {
+                const id = $("editTemplate").value;
+                const templates = config.templates.map((template) =>
+                    template.id === id
+                        ? {
+                              id,
+                              label: $("editLabel").value.trim() || template.label,
+                              sourceHint: $("editHint").value.trim(),
+                              prompt: $("editPrompt").value,
+                          }
+                        : template,
+                );
+                busy(true);
+                try {
+                    config = await api("/api/config", {
+                        method: "PUT",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ templates }),
+                    });
+                    renderTemplates();
+                    say("ok", "模板已保存。");
+                } catch (error) {
+                    say("err", "保存模板失败：" + error.message);
+                } finally {
+                    busy(false);
+                }
+            }
+
+            // ---- terms -------------------------------------------------------
+            function contextTerms(taxonomy) {
+                return (context && context.terms[taxonomy]) || [];
+            }
+
+            /** How a term is shown: its "父 / 子" path when it has one, else its name. */
+            function termLabel(term) {
+                return term.path || term.name;
+            }
+
+            /**
+             * A model word → the term it names, or null when the word is new.
+             * The model is asked for the full path of a hierarchical term, so a
+             * path, an id and a bare name all resolve here; the *id* is what the
+             * payload carries, because a name that exists under two parents is
+             * ambiguous on the publisher's side.
+             */
+            function canonical(taxonomy, word) {
+                const list = contextTerms(taxonomy);
+                const text = String(word).trim();
+                if (text === "") {
+                    return null;
+                }
+                if (/^\d+$/.test(text)) {
+                    return list.find((term) => String(term.id) === text) || null;
+                }
+                const lower = text.toLowerCase();
+                return (
+                    list.find((term) => termLabel(term).toLowerCase() === lower) ||
+                    list.find((term) => term.name.toLowerCase() === lower) ||
+                    null
+                );
+            }
+
+            function renderTerms() {
+                const box = $("terms");
+                box.innerHTML = "";
+                for (const taxonomy of TAXONOMIES) {
+                    const list = contextTerms(taxonomy);
+                    const cell = document.createElement("div");
+                    cell.className = "tax";
+                    const head = document.createElement("div");
+                    head.className = "tax-head";
+                    const name = document.createElement("span");
+                    name.textContent = LABELS[taxonomy];
+                    const chosen = document.createElement("span");
+                    const ticked = Array.from(picked[taxonomy] || []);
+                    chosen.textContent = ticked.length + " / " + list.length;
+                    head.append(name, chosen);
+                    cell.append(head);
+
+                    const body = document.createElement("div");
+                    body.className = "list";
+                    for (const term of list) {
+                        const label = document.createElement("label");
+                        const input = document.createElement("input");
+                        input.type = "checkbox";
+                        input.checked = ticked.includes(String(term.id));
+                        input.title = termLabel(term);
+                        input.onchange = () => {
+                            const set = picked[taxonomy] || (picked[taxonomy] = new Set());
+                            const id = String(term.id);
+                            if (input.checked) {
+                                set.add(id);
+                            } else {
+                                set.delete(id);
+                            }
+                            renderTerms();
+                        };
+                        const text = document.createElement("span");
+                        // Hierarchical terms read as "父 / 子"; the id travels.
+                        text.textContent = " " + termLabel(term) + " ";
+                        const count = document.createElement("span");
+                        count.className = "count";
+                        count.textContent = term.count > 0 ? term.count : "";
+                        label.append(input, text, count);
+                        body.append(label);
+                    }
+                    cell.append(body);
+                    box.append(cell);
+                }
+                renderExtras();
+            }
+
+            function renderExtras() {
+                const box = $("extras");
+                box.innerHTML = "";
+                let any = false;
+                for (const taxonomy of TAXONOMIES) {
+                    for (const word of extras[taxonomy] || []) {
+                        any = true;
+                        const chip = document.createElement("span");
+                        chip.className = "chip";
+                        chip.append(document.createTextNode(LABELS[taxonomy] + "：" + word + "（推送时新建）"));
+                        const remove = document.createElement("button");
+                        remove.textContent = "×";
+                        remove.onclick = () => {
+                            extras[taxonomy] = (extras[taxonomy] || []).filter((item) => item !== word);
+                            renderTerms();
+                        };
+                        chip.append(remove);
+                        box.append(chip);
+                    }
+                }
+                if (any) {
+                    const hint = document.createElement("p");
+                    hint.className = "hint";
+                    hint.textContent = "以上词不在词表里：确认无误再入队，推送时站点会创建它们。";
+                    box.append(hint);
+                }
+            }
+
+            // ---- draft -------------------------------------------------------
+            function applyDraft(draft, replace) {
+                if (replace) {
+                    picked = {};
+                    extras = {};
+                }
+                if (draft.terms) {
+                    for (const [taxonomy, words] of Object.entries(draft.terms)) {
+                        const set = picked[taxonomy] || (picked[taxonomy] = new Set());
+                        for (const word of words) {
+                            const hit = canonical(taxonomy, word);
+                            if (hit) {
+                                set.add(String(hit.id));
+                            } else {
+                                const list = extras[taxonomy] || (extras[taxonomy] = []);
+                                if (!list.includes(String(word))) {
+                                    list.push(String(word));
+                                }
+                            }
+                        }
+                    }
+                }
+                if (draft.newTerms) {
+                    for (const [taxonomy, words] of Object.entries(draft.newTerms)) {
+                        const list = extras[taxonomy] || (extras[taxonomy] = []);
+                        for (const word of words) {
+                            if (!list.includes(String(word))) {
+                                list.push(String(word));
+                            }
+                        }
+                    }
+                }
+                if (replace) {
+                    $("title").value = draft.title || "";
+                    $("content").value = draft.content || "";
+                }
+                renderTerms();
+            }
+
+            function composeRow() {
+                const terms = {};
+                for (const taxonomy of TAXONOMIES) {
+                    // Ticked vocabulary terms travel as ids (a name that exists
+                    // under two parents would be ambiguous); new words travel as
+                    // names, which the publisher creates on push.
+                    const words = Array.from(picked[taxonomy] || []).concat(extras[taxonomy] || []);
+                    if (words.length > 0) {
+                        terms[taxonomy] = words;
+                    }
+                }
+                // Status, author, date and the netdisk work orders are the
+                // publisher's own settings: this row says only what the model
+                // actually produced.
+                return { title: $("title").value, content: $("content").value, terms };
+            }
+
+            function refLabel(taxonomy, ref) {
+                const text = String(ref);
+                if (text.startsWith("name:")) {
+                    return text.slice(5) + "（新建）";
+                }
+                const term = contextTerms(taxonomy).find((item) => String(item.id) === text);
+                return term ? termLabel(term) : "#" + text;
+            }
+
+            function reportPreview(result) {
+                say("info", "校验通过 " + result.count + " 行：");
+                for (const row of result.rows) {
+                    const folded = Object.entries(row.terms || {})
+                        .map(([taxonomy, refs]) => LABELS[taxonomy] + "：" + refs.map((ref) => refLabel(taxonomy, ref)).join("、"))
+                        .join("；");
+                    const files = row.fileserve ? " · 网盘待办组 " + Object.keys(row.fileserve).length + " 个（空链接）" : "";
+                    say("ok", row.title + (files ? "\n" + files.replace(/^ · /, "") : "") + (folded ? "\n" + folded : ""));
+                }
+                for (const failure of result.errors) {
+                    say("err", "第 " + failure.row + " 行 " + failure.title + "：" + failure.error);
+                }
+                for (const note of result.warnings || []) {
+                    say("warn", "第 " + note.row + " 行 " + note.title + "：" + note.warning);
+                }
+            }
+
+            async function generate() {
+                const corpus = $("corpus").value.trim();
+                if (corpus === "") {
+                    say("warn", "先贴一段原始语料。");
+                    return;
+                }
+                const vocabulary = {};
+                for (const taxonomy of TAXONOMIES) {
+                    vocabulary[taxonomy] = contextTerms(taxonomy).map((term) => ({
+                        name: term.name,
+                        count: term.count,
+                        path: term.path || "",
+                    }));
+                }
+                const template = currentTemplate();
+                busy(true);
+                clearMessages();
+                say("info", "正在请求模型（模板：" + (template ? template.label : "?") + "）…");
+                try {
+                    const result = await post("/api/generate", {
+                        corpus,
+                        templateId: template ? template.id : "",
+                        vocabulary,
+                    });
+                    applyDraft(result.draft, true);
+                    $("raw").textContent = result.raw || "";
+                    say("ok", "草稿已生成（模型 " + result.model + (result.proxy ? " · " + result.proxy : "") + "）。核对标题、正文与标签后再入队。");
+                } catch (error) {
+                    say("err", "生成失败：" + error.message);
+                } finally {
+                    busy(false);
+                }
+            }
+
+            async function preview() {
+                busy(true);
+                try {
+                    clearMessages();
+                    reportPreview(await post("/api/publisher/preview", { rows: [composeRow()] }));
+                } catch (error) {
+                    say("err", "校验失败：" + error.message);
+                } finally {
+                    busy(false);
+                }
+            }
+
+            async function publish() {
+                busy(true);
+                try {
+                    clearMessages();
+                    const result = await post("/api/publisher/ingest", { source: "intake", rows: [composeRow()] });
+                    say("ok", "已入队 " + result.imported + " 行" + (result.localIds && result.localIds.length ? "（localId " + result.localIds.join(", ") + "）" : "") + "。回主窗口就能看到，推送仍在主窗口做。");
+                    for (const failure of result.errors || []) {
+                        say("err", "第 " + failure.row + " 行 " + failure.title + "：" + failure.error);
+                    }
+                    for (const note of result.warnings || []) {
+                        say("warn", "第 " + note.row + " 行 " + note.title + "：" + note.warning);
+                    }
+                } catch (error) {
+                    say("err", "入队失败：" + error.message);
+                } finally {
+                    busy(false);
+                }
+            }
+
+            function resetDraft() {
+                picked = {};
+                extras = {};
+                $("title").value = "";
+                $("content").value = "";
+                $("corpus").value = "";
+                $("raw").textContent = "";
+                clearMessages();
+                renderTerms();
+            }
+
+            // ---- wiring ------------------------------------------------------
+            $("template").onchange = showSourceHint;
+            $("editTemplate").onchange = loadTemplateEditor;
+            $("saveConfig").onclick = saveConfig;
+            $("saveTemplate").onclick = saveTemplate;
+            $("usePublisherProxy").onchange = renderProxyInfo;
+            $("generate").onclick = generate;
+            $("preview").onclick = preview;
+            $("publish").onclick = publish;
+            $("reset").onclick = resetDraft;
+            $("rawToggle").onclick = () => $("raw").classList.toggle("hidden");
+
+            boot();
+        </script>
+    </body>
+</html>

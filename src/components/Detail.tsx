@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { RowDTO, StateDTO } from "../types";
 import { TAXONOMY_LABELS, TAXONOMY_ORDER } from "../types";
 import { ensureStagingDir, fetchStagingDir, openStagingDir, saveRow, uploadImage, type RowPatch } from "../api";
-import { mergeTermTokens, splitTermInput } from "../../shared/terms";
+import { groupTermsByRoot, mergeTermTokens, splitTermInput, termPath, type TermOption } from "../../shared/terms";
 import FileServeEditor from "./FileServeEditor";
 import { normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
-import { imageTag, insertAtCaret, toBase64 } from "../../shared/image-upload";
+import { prependImageTags, toBase64 } from "../../shared/image-upload";
 
 interface Props {
     row: RowDTO;
@@ -160,35 +160,44 @@ export default function Detail({ row, state, busy, onEdit, discardFlush, notify 
     // the site's own editor would insert, so the post never depends on
     // this tool still running.
     const [uploading, setUploading] = useState(false);
+    const [dragging, setDragging] = useState(false);
     const imageInput = useRef<HTMLInputElement | null>(null);
-    // The caret is remembered on every selection change: the picker button
-    // steals focus, so the field's own selection is gone by the time the
-    // upload answers. MAX_SAFE_INTEGER = "no caret seen yet" → append.
-    const caret = useRef(Number.MAX_SAFE_INTEGER);
-    const trackCaret = (field: HTMLTextAreaElement) => {
-        caret.current = field.selectionStart;
-    };
 
-    const onImagePicked = (input: HTMLInputElement) => {
-        const file = input.files?.[0] ?? null;
-        // Reset first: picking the same file twice must still fire change.
-        input.value = "";
-        if (!file) {
+    /**
+     * The drop zone's one job: upload what was dropped/picked, then put the
+     * tags at the very start of the body. Order is preserved because the
+     * site's cover pipeline takes the first image of the body — this is the
+     * publishing contract, not a caret position. A failed file is reported and
+     * skipped; the ones that uploaded still land.
+     */
+    const onImagesPicked = (files: FileList | null) => {
+        const picked = Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
+        if (picked.length === 0) {
+            notify("err", "没有可上传的图片（只接受图片文件）。");
             return;
         }
         setUploading(true);
         void (async () => {
-            try {
-                const encoded = toBase64(await file.arrayBuffer());
-                const uploaded = await uploadImage(file.name, file.type, encoded);
-                const content = insertAtCaret(draftRef.current.content, imageTag(uploaded.url), caret.current);
-                update({ content });
-                notify("ok", `图片已插入：${uploaded.path}`);
-            } catch (error) {
-                notify("err", `图片上传失败：${String(error)}`);
-            } finally {
-                setUploading(false);
+            const urls: string[] = [];
+            const failures: string[] = [];
+            for (const file of picked) {
+                try {
+                    const encoded = toBase64(await file.arrayBuffer());
+                    const uploaded = await uploadImage(file.name, file.type, encoded);
+                    urls.push(uploaded.url);
+                } catch (error) {
+                    failures.push(`${file.name}：${String(error)}`);
+                }
             }
+            if (urls.length > 0) {
+                update({ content: prependImageTags(draftRef.current.content, urls) });
+            }
+            if (failures.length > 0) {
+                notify("err", `图片上传失败：${failures.join("；")}`);
+            } else {
+                notify("ok", `已插入 ${urls.length} 张图片（正文最前）`);
+            }
+            setUploading(false);
         })();
     };
 
@@ -353,6 +362,35 @@ export default function Detail({ row, state, busy, onEdit, discardFlush, notify 
                 if (taxonomy !== "resource_category" && options.length === 0 && selected.length === 0) {
                     return null;
                 }
+                // 分类 is the one hierarchical taxonomy, so it is the one that
+                // reads badly as a flat list: one line per top-level category,
+                // its children on the same line behind a └, the next category
+                // on the next line. Everything else is flat and unchanged.
+                const hierarchical = options.some((option) => option.parent !== 0);
+                const renderOption = (option: TermOption, child = false) => {
+                    const ref = String(option.id);
+                    return (
+                        <label
+                            key={ref}
+                            className="inline-flex items-center gap-1 cursor-pointer"
+                            title={termPath(option, options)}
+                        >
+                            {child ? <span className="text-neutral-300">└</span> : null}
+                            <input
+                                type="checkbox"
+                                checked={selected.includes(ref)}
+                                onChange={(event) => {
+                                    if (event.target.checked) {
+                                        addRef(taxonomy, ref);
+                                    } else {
+                                        removeTerm(taxonomy, ref);
+                                    }
+                                }}
+                            />
+                            <span className={child ? "text-neutral-600" : "font-medium"}>{option.name}</span>
+                        </label>
+                    );
+                };
                 return (
                     <div key={taxonomy}>
                         <span className="lbl">{TAXONOMY_LABELS[taxonomy] ?? taxonomy}</span>
@@ -369,72 +407,78 @@ export default function Detail({ row, state, busy, onEdit, discardFlush, notify 
                             }}
                             onBlur={() => commitTermInput(taxonomy)}
                         />
-                        <div className="flex flex-wrap gap-x-3 gap-y-1">
-                            {options.map((option) => {
-                                const ref = String(option.id);
-                                return (
-                                    <label key={ref} className="inline-flex items-center gap-1 cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            checked={selected.includes(ref)}
-                                            onChange={(event) => {
-                                                if (event.target.checked) {
-                                                    addRef(taxonomy, ref);
-                                                } else {
-                                                    removeTerm(taxonomy, ref);
-                                                }
-                                            }}
-                                        />
-                                        <span>{option.name}</span>
-                                    </label>
-                                );
-                            })}
-                            {/* Selected refs missing from the term registry stay
-                                visible and removable: not-yet-created names. */}
-                            {selected
-                                .filter((ref) => ref.startsWith("name:") || !options.some((option) => String(option.id) === ref))
-                                .map((ref) => (
-                                    <span key={ref} className="chip">
-                                        {refLabel(taxonomy, ref)}
-                                        <button
-                                            className="ml-1 text-neutral-400 hover:text-red-500"
-                                            onClick={() => removeTerm(taxonomy, ref)}
-                                        >
-                                            ×
-                                        </button>
-                                    </span>
+                        {hierarchical ? (
+                            <div className="flex flex-col gap-y-1">
+                                {groupTermsByRoot(options).map((group) => (
+                                    <div key={group.root.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                        {renderOption(group.root)}
+                                        {group.children.map((child) => renderOption(child, true))}
+                                    </div>
                                 ))}
-                        </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-wrap gap-x-3 gap-y-1">
+                                {options.map((option) => renderOption(option))}
+                            </div>
+                        )}
+                        {/* Selected refs missing from the term registry stay
+                            visible and removable: not-yet-created names. */}
+                        {selected
+                            .filter((ref) => ref.startsWith("name:") || !options.some((option) => String(option.id) === ref))
+                            .map((ref) => (
+                                <span key={ref} className="chip">
+                                    {refLabel(taxonomy, ref)}
+                                    <button
+                                        className="ml-1 text-neutral-400 hover:text-red-500"
+                                        onClick={() => removeTerm(taxonomy, ref)}
+                                    >
+                                        ×
+                                    </button>
+                                </span>
+                            ))}
                     </div>
                 );
             })}
 
             <div className="block">
-                <div className="flex items-center justify-between gap-2">
-                    <span className="lbl">正文（源码，渲染归站点）</span>
-                    <button
-                        className="btn"
-                        disabled={busy || uploading}
-                        onClick={() => imageInput.current?.click()}
-                    >
-                        {uploading ? "上传中…" : "插入图片"}
-                    </button>
+                <span className="lbl">正文（源码，渲染归站点）</span>
+                <div
+                    className={`mb-2 rounded border border-dashed px-3 py-2 text-xs cursor-pointer ${
+                        dragging
+                            ? "border-blue-400 bg-blue-50 text-blue-700"
+                            : "border-neutral-300 text-neutral-500 hover:border-neutral-400"
+                    }`}
+                    onClick={() => imageInput.current?.click()}
+                    onDragOver={(event) => {
+                        event.preventDefault();
+                        setDragging(true);
+                    }}
+                    onDragLeave={() => setDragging(false)}
+                    onDrop={(event) => {
+                        event.preventDefault();
+                        setDragging(false);
+                        onImagesPicked(event.dataTransfer.files);
+                    }}
+                >
+                    {uploading ? "上传中…" : "拖放图片到这里（可多张，也可点击选择）—— 一律插到正文最前"}
                 </div>
                 <input
                     ref={imageInput}
                     type="file"
                     accept="image/*"
+                    multiple
                     className="hidden"
-                    onChange={(event) => onImagePicked(event.currentTarget)}
+                    onChange={(event) => {
+                        const files = event.currentTarget.files;
+                        event.currentTarget.value = "";
+                        onImagesPicked(files);
+                    }}
                 />
                 <textarea
                     className="w-full font-mono text-xs leading-5"
                     rows={8}
                     value={draft.content}
                     onChange={(event) => update({ content: event.target.value })}
-                    onSelect={(event) => trackCaret(event.currentTarget)}
-                    onKeyUp={(event) => trackCaret(event.currentTarget)}
-                    onClick={(event) => trackCaret(event.currentTarget)}
                 />
             </div>
 

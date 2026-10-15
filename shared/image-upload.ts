@@ -1,6 +1,6 @@
 /**
- * Pure helpers behind the detail panel's image button: turn the picked file
- * into the wire form, splice the tag into the content, and keep the tag shape
+ * Pure helpers behind the detail panel's image drop zone: turn the picked file
+ * into the wire form, splice the tags into the content, and keep the tag shape
  * in one place so the inserted markup is identical wherever it comes from.
  * No DOM and no fetch here — the caller owns both.
  */
@@ -22,11 +22,17 @@ export function imageTag(url: string, alt = ""): string {
 }
 
 /**
- * Splices `text` into `content` at `caret`, clamped to the content's bounds —
- * a stale caret (the field was emptied elsewhere) lands at the end instead of
- * throwing or dropping the tag.
+ * Puts the uploaded images at the very start of the post source, in the order
+ * they were picked. Where they land is part of the publishing contract rather
+ * than a preference: the site builds the cover from the first image of the
+ * body, and the cover pipeline runs on push. Leading blank lines are folded
+ * away so dropping twice in a row does not stack empty lines above the images.
  */
-export function insertAtCaret(content: string, text: string, caret: number): string {
-    const at = Math.min(Math.max(Math.trunc(caret) || 0, 0), content.length);
-    return content.slice(0, at) + text + content.slice(at);
+export function prependImageTags(content: string, urls: string[]): string {
+    const tags = urls.map((url) => imageTag(url)).join("\n");
+    if (tags === "") {
+        return content;
+    }
+    const body = content.replace(/^\n+/, "");
+    return body === "" ? tags : `${tags}\n${body}`;
 }

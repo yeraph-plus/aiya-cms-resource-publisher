@@ -204,3 +204,71 @@ describe("csv import", () => {
         expect(noBody.statusCode).toBe(400);
     });
 });
+
+/**
+ * 新行默认状态 + 挂网盘待办组: two settings the publisher applies itself, so the
+ * three fresh-row paths (摄取, CSV 导入, 新建行) have to agree.
+ */
+describe("fresh-row settings", () => {
+    it("validates the two new settings and reflects them in /api/state", async () => {
+        const bad = await app.inject({
+            method: "PUT",
+            url: "/api/settings",
+            payload: { newRowStatus: "published" },
+        });
+        expect(bad.statusCode).toBe(400);
+        expect(bad.json().error).toContain("draft 或 publish");
+
+        const saved = await app.inject({
+            method: "PUT",
+            url: "/api/settings",
+            payload: { newRowStatus: "publish", netdiskTodoEnabled: true, netdiskTodoGroups: "quark, mega ,quark" },
+        });
+        expect(saved.statusCode).toBe(200);
+
+        const state = await app.inject({ method: "GET", url: "/api/state" });
+        expect(state.json().settings.newRowStatus).toBe("publish");
+        expect(state.json().settings.netdiskTodoEnabled).toBe(true);
+        // Whitelisted and deduped on the way in.
+        expect(state.json().settings.netdiskTodoGroups).toBe("quark");
+    });
+
+    it("gives a new row the configured status and the netdisk work order", async () => {
+        const created = await app.inject({ method: "POST", url: "/api/posts", payload: { title: "设置行" } });
+        const localId = created.json().localId;
+        expect(created.json().row.status).toBe("publish");
+        expect(created.json().row.fileserveParsed["1"]).toMatchObject({
+            adapter: "platform",
+            netdisk: "quark",
+            title: "夸克网盘",
+            price: 2,
+            url: "",
+        });
+        await app.inject({ method: "DELETE", url: `/api/posts/${localId}` });
+    });
+
+    it("gives an imported row the same work order", async () => {
+        const res = await app.inject({
+            method: "POST",
+            url: "/api/import/apply",
+            payload: {
+                csv: "标题\n导入待办\n",
+                mapping: { title: 0 },
+                defaultStatus: "draft",
+                unmatchedAuthor: "error",
+            },
+        });
+        expect(res.statusCode).toBe(200);
+
+        const state = await app.inject({ method: "GET", url: "/api/state" });
+        const row = state.json().posts.find((post: { title: string }) => post.title === "导入待办");
+        expect(row.fileserveParsed["1"]).toMatchObject({ netdisk: "quark", url: "" });
+    });
+
+    it("stops attaching them once the switch goes off", async () => {
+        await app.inject({ method: "PUT", url: "/api/settings", payload: { netdiskTodoEnabled: false } });
+        const created = await app.inject({ method: "POST", url: "/api/posts", payload: { title: "关闭后" } });
+        expect(created.json().row.fileserveParsed).toBeNull();
+        await app.inject({ method: "DELETE", url: `/api/posts/${created.json().localId}` });
+    });
+});
