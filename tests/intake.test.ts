@@ -1,18 +1,21 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
-// The intake config resolves its path at import time, exactly like the
-// publisher's database does — point it at a temp dir before importing.
+// The intake resolves its data dir (the legacy config path) at import time,
+// exactly like the publisher's database does — point it at a temp dir so a
+// developer's real intake.config.json can never leak into a test run.
 process.env.PUBLISHER_DATA = mkdtempSync(join(tmpdir(), "intake-test-"));
 
 let config: typeof import("../intake/config.js");
+let contract: typeof import("../intake/contract.js");
 let parse: typeof import("../intake/parse.js");
 let prompt: typeof import("../intake/prompt.js");
 
 beforeAll(async () => {
     config = await import("../intake/config.js");
+    contract = await import("../intake/contract.js");
     parse = await import("../intake/parse.js");
     prompt = await import("../intake/prompt.js");
 });
@@ -94,47 +97,83 @@ describe("buildUserMessage", () => {
 });
 
 describe("intake config", () => {
-    it("falls back to the built-ins when the file is missing or unusable", () => {
-        const loaded = config.loadConfig();
-        expect(loaded.publisherUrl).toBe("http://127.0.0.1:5175");
-        expect(loaded.templates).toHaveLength(6);
-        expect(loaded.llm.provider).toBe("openai");
-        expect(loaded.llm.jsonMode).toBe(true);
+    it("starts with no prompt templates at all, and degrades field by field", () => {
+        const fresh = config.parseConfig(null);
+        // The tool ships no presets: writing the prompts is the user's job.
+        expect(fresh.templates).toEqual([]);
+        expect(fresh.llm.provider).toBe("openai");
+        expect(fresh.llm.jsonMode).toBe(true);
 
-        writeFileSync(config.configPath, "{ 这不是 json", "utf8");
-        expect(config.loadConfig().templates).toHaveLength(6);
+        // A hand-edited database value must not take the window down with it.
+        expect(config.parseConfig("{ 这不是 json").templates).toEqual([]);
+        expect(config.parseConfig('"just a string"').templates).toEqual([]);
+        expect(config.parseConfig("{}").llm.model).toBe("");
     });
 
-    it("round-trips a saved config and never hands the key to the browser", () => {
+    it("keeps exactly the templates that are stored, without injecting any", () => {
+        const stored = JSON.stringify({
+            llm: { model: "m" },
+            templates: [
+                { id: "mine", label: "我自己写的", sourceHint: "来源页", prompt: "写点什么" },
+                { id: "", label: "坏的", prompt: "" },
+            ],
+        });
+        const loaded = config.parseConfig(stored);
+        expect(loaded.templates.map((item) => item.id)).toEqual(["mine"]);
+
+        // Clearing the list is a legitimate state, not an error.
+        const cleared = config.mergeConfigPayload(loaded, { templates: [] });
+        expect(cleared.error).toBeNull();
+        expect(cleared.config.templates).toEqual([]);
+    });
+
+    it("round-trips through the stored blob and never hands the key to the browser", () => {
         const saved = config.defaultConfig();
-        saved.publisherUrl = "http://127.0.0.1:5199";
         saved.llm = { ...saved.llm, provider: "gemini", model: "m", apiKey: "secret", temperature: 1.4, jsonMode: false };
-        saved.templates = saved.templates.slice(0, 2);
-        config.saveConfig(saved);
+        saved.templates = [{ id: "only", label: "唯一一份", sourceHint: "", prompt: "整理语料" }];
 
-        const loaded = config.loadConfig();
-        expect(loaded.publisherUrl).toBe("http://127.0.0.1:5199");
+        const loaded = config.parseConfig(config.serializeConfig(saved));
         expect(loaded.llm).toMatchObject({ provider: "gemini", model: "m", apiKey: "secret", temperature: 1.4, jsonMode: false });
-        expect(loaded.templates.map((item) => item.id)).toEqual(["game", "book"]);
+        expect(loaded.templates.map((item) => item.id)).toEqual(["only"]);
 
-        const exposed = config.publicConfig(loaded);
+        const exposed = config.publicConfig(loaded, "http://127.0.0.1:5199");
         expect(exposed.llm.hasApiKey).toBe(true);
         expect(Object.keys(exposed.llm)).not.toContain("apiKey");
         expect(JSON.stringify(exposed)).not.toContain("secret");
+        // The tool's address is a launch fact the window only displays.
+        expect(exposed.publisherUrl).toBe("http://127.0.0.1:5199");
+    });
+
+    it("imports the pre-database file once, and ignores its stale publisher address", () => {
+        const legacy = JSON.stringify({
+            publisherUrl: "http://127.0.0.1:9999",
+            llm: { provider: "openai", model: "legacy-model", apiKey: "legacy-key", jsonMode: false },
+            templates: [{ id: "custom", label: "自定义", sourceHint: "", prompt: "整理这段语料" }],
+        });
+        const imported = config.parseLegacyConfig(legacy);
+        expect(imported).not.toBeNull();
+        expect(imported?.llm.model).toBe("legacy-model");
+        expect(imported?.llm.apiKey).toBe("legacy-key");
+        expect(imported?.templates.map((item) => item.id)).toEqual(["custom"]);
+        expect(imported).not.toHaveProperty("publisherUrl");
+
+        // Nothing worth importing: no key, no templates, or not JSON at all.
+        expect(config.parseLegacyConfig(JSON.stringify({ publisherUrl: "http://x", llm: {} }))).toBeNull();
+        expect(config.parseLegacyConfig("{ broken")).toBeNull();
+        expect(config.parseLegacyConfig("[]")).toBeNull();
     });
 
     it("validates a PUT payload field by field", () => {
         const current = config.defaultConfig();
         const cases: [unknown, string][] = [
             ["不是对象", "必须是一个对象"],
-            [{ publisherUrl: "" }, "不能为空"],
-            [{ publisherUrl: "ftp://x" }, "http(s)"],
             [{ llm: "x" }, "llm 必须是一个对象"],
             [{ llm: { provider: "anthropic" } }, "provider"],
+            [{ llm: { baseUrl: "not a url" } }, "baseUrl"],
             [{ llm: { temperature: 9 } }, "temperature"],
             [{ llm: { jsonMode: "yes" } }, "jsonMode"],
             [{ llm: { usePublisherProxy: "yes" } }, "usePublisherProxy"],
-            [{ templates: [] }, "至少"],
+            [{ templates: "不是数组" }, "templates 必须是数组"],
         ];
         for (const [payload, fragment] of cases) {
             const merged = config.mergeConfigPayload(current, payload);
@@ -142,8 +181,7 @@ describe("intake config", () => {
             expect(merged.config).toBe(current);
         }
 
-        // An empty key means "keep the stored one"; an empty template list is
-        // the only way to lose the built-ins, and it is refused above.
+        // An empty key means "keep the stored one".
         const kept = config.mergeConfigPayload(
             { ...current, llm: { ...current.llm, apiKey: "stored" } },
             { llm: { apiKey: "", model: "new-model" }, templates: [{ id: "x", label: "X", sourceHint: "", prompt: "p" }] },
@@ -152,6 +190,11 @@ describe("intake config", () => {
         expect(kept.config.llm.apiKey).toBe("stored");
         expect(kept.config.llm.model).toBe("new-model");
         expect(kept.config.templates.map((item) => item.id)).toEqual(["x"]);
+
+        // Entries without an id or a prompt are dropped, not refused.
+        const dropped = config.mergeConfigPayload(current, { templates: [{ id: "", prompt: "x" }, { id: "y", prompt: "" }] });
+        expect(dropped.error).toBeNull();
+        expect(dropped.config.templates).toEqual([]);
     });
 
     it("shares the publisher's proxy by default and lets the switch turn it off", () => {
@@ -163,26 +206,17 @@ describe("intake config", () => {
         expect(off.config.llm).not.toHaveProperty("proxyUrl");
     });
 
-    it("refreshes an untouched built-in prompt once and leaves an edited one alone", () => {
-        // A miniature of the pre-2.0 contract: it declares the fields the
-        // publisher owns now (authorId in the JSON block, status in a hard
-        // rule). A template carrying these was never rewritten by hand.
-        const oldContract = `【输出格式】\n{\n  "title": "站内标题",\n  "status": "draft",\n  "authorId": null\n}\n\n【硬规则】\n5. status 固定 "draft"，authorId 固定 null。`;
-
-        const saved = config.defaultConfig();
-        saved.templatesVersion = 1;
-        saved.templates = saved.templates.map((template) =>
-            template.id === "game"
-                ? { ...template, prompt: oldContract }
-                : { ...template, prompt: `${template.prompt}\n（我自己改的补充）` },
-        );
-        config.saveConfig(saved);
-
-        const loaded = config.loadConfig();
-        expect(loaded.templatesVersion).toBe(config.CURRENT_TEMPLATES_VERSION);
-        const game = loaded.templates.find((item) => item.id === "game")?.prompt ?? "";
-        expect(game).not.toContain('"authorId"');
-        expect(game).toContain("只输出上面列出的字段");
-        expect(loaded.templates.find((item) => item.id === "book")?.prompt).toContain("（我自己改的补充）");
+    it("keeps the output contract in step with what the parser reads", () => {
+        // The contract is the only prompt text the tool owns. If it stops naming
+        // a field the parser needs, every user-written template breaks.
+        for (const key of ["title", "content", "terms", "newTerms"]) {
+            expect(contract.OUTPUT_CONTRACT).toContain(`"${key}"`);
+        }
+        // …and it must not ask for the fields the publishing tool decides.
+        for (const key of ["authorId", "dateLocal", "fileserve", "status"]) {
+            expect(contract.OUTPUT_CONTRACT).not.toContain(`"${key}"`);
+        }
+        expect(contract.OUTPUT_CONTRACT).toContain("【输出格式】");
+        expect(contract.OUTPUT_CONTRACT).toContain("分类是层级词法");
     });
 });

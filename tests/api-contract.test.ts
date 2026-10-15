@@ -10,9 +10,11 @@ process.env.PUBLISHER_DATA = mkdtempSync(join(tmpdir(), "publisher-contract-"));
 
 let app: FastifyInstance;
 let buildApp: typeof import("../server/index.js").buildApp;
+let db: typeof import("../server/db.js");
 
 beforeAll(async () => {
     ({ buildApp } = await import("../server/index.js"));
+    db = await import("../server/db.js");
     app = await buildApp();
     await app.ready();
 });
@@ -270,5 +272,39 @@ describe("fresh-row settings", () => {
         const created = await app.inject({ method: "POST", url: "/api/posts", payload: { title: "关闭后" } });
         expect(created.json().row.fileserveParsed).toBeNull();
         await app.inject({ method: "DELETE", url: `/api/posts/${created.json().localId}` });
+    });
+});
+
+/**
+ * The 智能摄取 window's configuration lives in this database (one opaque row),
+ * so the packaged app has a single data store instead of a file beside it.
+ */
+describe("intake config storage", () => {
+    it("stores and returns the opaque blob the intake process owns", async () => {
+        const empty = await app.inject({ method: "GET", url: "/api/intake/config" });
+        expect(empty.statusCode).toBe(200);
+        expect(empty.json()).toEqual({ payload: null });
+
+        const blank = await app.inject({ method: "PUT", url: "/api/intake/config", payload: { payload: "   " } });
+        expect(blank.statusCode).toBe(400);
+
+        const tooBig = await app.inject({
+            method: "PUT",
+            url: "/api/intake/config",
+            payload: { payload: "x".repeat(512 * 1024 + 1) },
+        });
+        expect(tooBig.statusCode).toBe(413);
+
+        const blob = JSON.stringify({ llm: { provider: "openai", model: "smoke-model", apiKey: "k" }, templates: [] });
+        const saved = await app.inject({ method: "PUT", url: "/api/intake/config", payload: { payload: blob } });
+        expect(saved.statusCode).toBe(200);
+        expect(saved.json()).toEqual({ ok: true });
+
+        // Read back through the HTTP route and through the table: the row is
+        // what a restart sees, and the log records who touched it.
+        const read = await app.inject({ method: "GET", url: "/api/intake/config" });
+        expect(JSON.parse(read.json().payload).llm.model).toBe("smoke-model");
+        expect(db.getIntakeConfig()).toBe(blob);
+        expect(db.listLogs(0, 20).map((entry) => entry.message).join("\n")).toContain("摄取窗口配置已更新");
     });
 });

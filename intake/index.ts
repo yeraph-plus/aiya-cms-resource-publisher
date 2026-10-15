@@ -1,12 +1,14 @@
 /**
- * 智能摄取窗口 — an isolated local process with its own window, its own
- * configuration and its own model credentials. It shares nothing with the
- * publishing tool except the pure taxonomy registry and the one HTTP contract
- * the tool publishes: /api/ingest.
+ * 智能摄取窗口 — an isolated local process with its own window and its own
+ * model credentials. It shares the pure taxonomy registry and the HTTP contract
+ * the publishing tool publishes: /api/ingest, plus /api/intake/config, which is
+ * where its own configuration is stored (one row in the tool's database, so the
+ * packaged app has a single data store).
  *
  * Two reasons it is a separate process rather than a tab in the publisher:
- * the publisher then keeps zero model code and zero keys, and a model provider
- * change (or a broken prompt) cannot take the push queue down with it.
+ * no model code and no model call lives in the push queue's process, and a
+ * model provider change (or a broken prompt) cannot take publishing down with
+ * it.
  *
  * It listens on 127.0.0.1:5180 and refuses anything else. The window talks
  * only to this origin — publisher calls are re-issued from here, so no CORS
@@ -17,11 +19,12 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
-import { fetch as undiciFetch } from "undici";
-import { loadConfig, mergeConfigPayload, publicConfig, saveConfig, type IntakeConfig } from "./config.js";
+import { mergeConfigPayload, publicConfig, type IntakeConfig } from "./config.js";
+import { OUTPUT_CONTRACT } from "./contract.js";
 import { complete, LlmError } from "./llm.js";
 import { extractJson, toDraft } from "./parse.js";
 import { buildUserMessage, type Vocabulary } from "./prompt.js";
+import { callPublisher, loadConfig, publisherUrl, saveConfig } from "./publisher.js";
 
 const PORT = Number(process.env.INTAKE_PORT ?? 5180);
 const HOST = "127.0.0.1";
@@ -82,34 +85,6 @@ function normalizeVocabulary(value: unknown): Vocabulary {
     return result;
 }
 
-/** Forward one call to the publishing tool and hand its answer back verbatim. */
-async function callPublisher(
-    config: IntakeConfig,
-    path: string,
-    init: { method: "GET" | "POST"; body?: unknown } = { method: "GET" },
-): Promise<{ status: number; body: unknown }> {
-    const url = `${config.publisherUrl.replace(/\/+$/, "")}${path}`;
-    let response: Awaited<ReturnType<typeof undiciFetch>>;
-    try {
-        response = await undiciFetch(url, {
-            method: init.method,
-            headers: { "content-type": "application/json" },
-            ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-            signal: AbortSignal.timeout(60_000),
-        });
-    } catch (error) {
-        throw new LlmError(`连不上发帖器（${url}）：${error instanceof Error ? error.message : String(error)}。发帖器在跑吗？`);
-    }
-    const text = await response.text();
-    let parsed: unknown = null;
-    try {
-        parsed = text === "" ? null : JSON.parse(text);
-    } catch {
-        parsed = { error: `发帖器返回了非 JSON 内容：${text.slice(0, 300)}` };
-    }
-    return { status: response.status, body: parsed };
-}
-
 async function main(): Promise<void> {
     const app = Fastify({ bodyLimit: BODY_LIMIT, logger: { level: "info" } });
 
@@ -128,33 +103,40 @@ async function main(): Promise<void> {
 
     app.get("/", async (_request, reply) => reply.type("text/html; charset=utf-8").send(page));
 
-    app.get("/api/health", async () => ({ ok: true, port: PORT, publisherUrl: loadConfig().publisherUrl }));
+    // The address is a launch fact, so health answers without touching the
+    // tool: the window can always show where this process points.
+    app.get("/api/health", async () => ({ ok: true, port: PORT, publisherUrl }));
 
-    app.get("/api/config", async () => publicConfig(loadConfig()));
+    // The one piece of prompt text the tool owns: the JSON shape the model must
+    // answer with. The window offers it as "插入输出契约" so a self-written
+    // template can be completed without copying it out of a doc.
+    app.get("/api/output-contract", async () => ({ contract: OUTPUT_CONTRACT }));
+
+    app.get("/api/config", async () => publicConfig(await loadConfig(), publisherUrl));
 
     app.put("/api/config", async (request, reply) => {
-        const merged = mergeConfigPayload(loadConfig(), request.body);
+        const merged = mergeConfigPayload(await loadConfig(), request.body);
         if (merged.error !== null) {
             return reply.code(400).send({ error: merged.error });
         }
-        saveConfig(merged.config);
-        app.log.info({ publisherUrl: merged.config.publisherUrl, model: merged.config.llm.model }, "配置已保存");
-        return publicConfig(merged.config);
+        await saveConfig(merged.config);
+        app.log.info({ publisherUrl, model: merged.config.llm.model }, "配置已保存");
+        return publicConfig(merged.config, publisherUrl);
     });
 
     // --- the publishing tool's contract, re-issued from this origin ----------
     app.get("/api/publisher/context", async (_request, reply) => {
-        const answer = await callPublisher(loadConfig(), "/api/ingest/context");
+        const answer = await callPublisher("/api/ingest/context");
         return reply.code(answer.status).send(answer.body);
     });
 
     app.post("/api/publisher/preview", async (request, reply) => {
-        const answer = await callPublisher(loadConfig(), "/api/ingest/preview", { method: "POST", body: request.body ?? {} });
+        const answer = await callPublisher("/api/ingest/preview", { method: "POST", body: request.body ?? {} });
         return reply.code(answer.status).send(answer.body);
     });
 
     app.post("/api/publisher/ingest", async (request, reply) => {
-        const answer = await callPublisher(loadConfig(), "/api/ingest", { method: "POST", body: request.body ?? {} });
+        const answer = await callPublisher("/api/ingest", { method: "POST", body: request.body ?? {} });
         return reply.code(answer.status).send(answer.body);
     });
 
@@ -170,7 +152,7 @@ async function main(): Promise<void> {
             return { proxyUrl: "", note: "直连" };
         }
         try {
-            const answer = await callPublisher(config, "/api/ingest/context");
+            const answer = await callPublisher("/api/ingest/context");
             const body = answer.body;
             const proxyUrl =
                 answer.status === 200 && body !== null && typeof body === "object" && typeof (body as { proxyUrl?: unknown }).proxyUrl === "string"
@@ -188,7 +170,7 @@ async function main(): Promise<void> {
 
     // --- one corpus in, one structured draft out -----------------------------
     app.post("/api/generate", async (request, reply) => {
-        const config = loadConfig();
+        const config = await loadConfig();
         const body = (request.body ?? {}) as { corpus?: unknown; templateId?: unknown; vocabulary?: unknown };
 
         const corpus = typeof body.corpus === "string" ? body.corpus.trim() : "";
@@ -200,9 +182,16 @@ async function main(): Promise<void> {
         }
 
         const templateId = typeof body.templateId === "string" ? body.templateId : "";
+        // No presets ship with the tool, so "no templates yet" is a normal
+        // first-run state and says what to do about it.
+        if (config.templates.length === 0) {
+            return reply
+                .code(400)
+                .send({ error: "还没有提示词模板：在配置卡片里「新建模板」写一份（可点「插入输出契约」补上必需的 JSON 契约）再生成。" });
+        }
         const template = config.templates.find((item) => item.id === templateId) ?? config.templates[0];
         if (template === undefined) {
-            return reply.code(500).send({ error: "配置里一个提示词模板都没有。" });
+            return reply.code(400).send({ error: `找不到模板「${templateId}」。` });
         }
 
         const user = buildUserMessage(corpus, normalizeVocabulary(body.vocabulary));

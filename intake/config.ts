@@ -1,24 +1,40 @@
 /**
- * The intake process's own configuration. It deliberately does not touch the
- * publisher's database or its settings table: this file lives next to
- * publisher.db but holds only the intake window's business — where to post,
- * which model, and the prompt templates.
+ * The intake window's own configuration: which model to call, with which key,
+ * and the prompt templates the window switches between.
  *
- * The API key is stored here in clear text, exactly like the publisher's
- * application password is stored in its own database. It never travels to the
- * browser: the window asks this process to run the completion, and every read
- * of the config redacts the key down to a boolean.
+ * It is *stored in the publishing tool's database* (table intake_config, one
+ * JSON blob) instead of a file next to it, so the packaged app has exactly one
+ * data store to back up, move or delete. That makes this module half of a pair:
+ * everything here is pure — the shape, the defaults, the never-throwing
+ * parse, the PUT validation — while publisher.ts owns the transport and is the
+ * only thing that reads or writes the stored blob.
+ *
+ * Prompt templates are the user's, not the tool's: the list starts empty and
+ * nothing is shipped as a default (see contract.ts for why), so there is also
+ * no "built-in generation" to migrate between versions.
+ *
+ * The API key is stored in clear text, exactly like the publishing tool stores
+ * its application password: both live in local files/databases on the same
+ * machine and never travel to a browser — every read of the config by the
+ * window redacts the key down to a boolean.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { BUILTIN_TEMPLATES, type Template } from "./templates.js";
+/** Same data-dir convention as the publishing tool's database. */
+export const dataDir = process.env.PUBLISHER_DATA ?? process.cwd();
 
-/** Same data-dir convention as the publisher's database. */
-const dataDir = process.env.PUBLISHER_DATA ?? process.cwd();
-export const configPath = join(dataDir, "intake.config.json");
+/** The legacy file this configuration used to live in; imported once, never written. */
+export const legacyConfigPath = `${dataDir}/intake.config.json`;
 
 export type Provider = "openai" | "gemini";
+
+export interface Template {
+    id: string;
+    label: string;
+    /** Where the raw material for this type usually comes from — shown as a hint. */
+    sourceHint: string;
+    /** The system prompt: the user's craft rules plus the output contract. */
+    prompt: string;
+}
 
 export interface LlmConfig {
     provider: Provider;
@@ -38,12 +54,9 @@ export interface LlmConfig {
 }
 
 export interface IntakeConfig {
-    /** The publishing tool's fixed ingest entry. */
-    publisherUrl: string;
     llm: LlmConfig;
+    /** Empty until the user writes one in the window. */
     templates: Template[];
-    /** Which built-in prompt generation is stored; see CURRENT_TEMPLATES_VERSION. */
-    templatesVersion: number;
 }
 
 export const DEFAULT_LLM: LlmConfig = {
@@ -56,22 +69,8 @@ export const DEFAULT_LLM: LlmConfig = {
     jsonMode: true,
 };
 
-/**
- * Bumped when the built-in contracts change shape. A stored template with a
- * lower version is refreshed *only* while it still asks the model for the
- * fields the publisher owns nowadays (the old built-ins did, in their JSON
- * block and in a hard rule); a prompt somebody rewrote survives every upgrade.
- */
-export const CURRENT_TEMPLATES_VERSION = 2;
-const STALE_CONTRACT_MARKERS = ['"authorId"', "status 固定"];
-
 export function defaultConfig(): IntakeConfig {
-    return {
-        publisherUrl: "http://127.0.0.1:5175",
-        llm: { ...DEFAULT_LLM },
-        templates: BUILTIN_TEMPLATES.map((item) => ({ ...item })),
-        templatesVersion: CURRENT_TEMPLATES_VERSION,
-    };
+    return { llm: { ...DEFAULT_LLM }, templates: [] };
 }
 
 function asString(value: unknown, fallback: string): string {
@@ -97,35 +96,41 @@ function asTemplate(value: unknown): Template | null {
 }
 
 /**
- * Never throws: a hand-edited or half-written file degrades to the defaults
- * field by field, because losing the window to a stray comma would be worse
- * than losing one setting.
+ * A stored blob → a usable config, never throwing: a hand-edited payload
+ * degrades to the defaults field by field, because losing the window to a
+ * stray comma would be worse than losing one setting. Templates are taken as
+ * they are stored — nothing is injected, since the tool ships no presets — and
+ * a payload with no templates at all is simply a configuration that has none
+ * yet.
  */
-export function loadConfig(): IntakeConfig {
+export function parseConfig(raw: string | null): IntakeConfig {
     const fallback = defaultConfig();
+    if (raw === null || raw.trim() === "") {
+        return fallback;
+    }
     let parsed: unknown;
     try {
-        parsed = JSON.parse(readFileSync(configPath, "utf8"));
+        parsed = JSON.parse(raw);
     } catch {
         return fallback;
     }
+    return parseIntakeConfig(parsed, fallback);
+}
+
+/** The shared body of parseConfig and the legacy-file import. */
+function parseIntakeConfig(parsed: unknown, fallback: IntakeConfig): IntakeConfig {
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
         return fallback;
     }
-
     const source = parsed as Record<string, unknown>;
     const llmSource = (source.llm ?? {}) as Record<string, unknown>;
     const provider = llmSource.provider === "gemini" ? "gemini" : "openai";
     const temperature = typeof llmSource.temperature === "number" ? llmSource.temperature : fallback.llm.temperature;
-    const stored = Array.isArray(source.templates)
+    const templates = Array.isArray(source.templates)
         ? source.templates.map(asTemplate).filter((item): item is Template => item !== null)
         : [];
-    // An empty saved list means "use the built-ins", not "no templates".
-    const templates = stored.length > 0 ? stored : fallback.templates;
-    const version = typeof source.templatesVersion === "number" ? source.templatesVersion : 1;
 
     return {
-        publisherUrl: asString(source.publisherUrl, fallback.publisherUrl).trim() || fallback.publisherUrl,
         llm: {
             provider,
             baseUrl: asString(llmSource.baseUrl, "").trim(),
@@ -135,36 +140,47 @@ export function loadConfig(): IntakeConfig {
             temperature: Math.min(2, Math.max(0, temperature)),
             jsonMode: llmSource.jsonMode !== false,
         },
-        templates: version < CURRENT_TEMPLATES_VERSION ? refreshStaleBuiltins(templates, fallback.templates) : templates,
-        templatesVersion: CURRENT_TEMPLATES_VERSION,
+        templates,
     };
 }
 
-/**
- * Upgrades the built-in prompts in place. A prompt the user rewrote is left
- * alone — the markers only survive in a template that still declares author and
- * status as outputs, which is exactly what the old built-ins did.
- */
-function refreshStaleBuiltins(stored: Template[], builtins: Template[]): Template[] {
-    return stored.map((template) => {
-        const builtin = builtins.find((item) => item.id === template.id);
-        const stale = STALE_CONTRACT_MARKERS.every((marker) => template.prompt.includes(marker));
-        return builtin && stale ? { ...builtin } : template;
-    });
+/** The stored form. One row, so the shape only has to survive a JSON round trip. */
+export function serializeConfig(config: IntakeConfig): string {
+    return JSON.stringify(config);
 }
 
-export function saveConfig(config: IntakeConfig): void {
-    writeFileSync(configPath, `${JSON.stringify(config, null, 4)}\n`, "utf8");
+/**
+ * The pre-database file's shape (it also carried publisherUrl, which is a
+ * launch fact now and is ignored here). Returns null when the file has nothing
+ * usable, so a broken leftover cannot block the move to the database.
+ */
+export function parseLegacyConfig(raw: string): IntakeConfig | null {
+    try {
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return null;
+        }
+        const config = parseIntakeConfig(parsed, defaultConfig());
+        const source = parsed as Record<string, unknown>;
+        const llmSource = (source.llm ?? {}) as Record<string, unknown>;
+        const hasKey = typeof llmSource.apiKey === "string" && llmSource.apiKey.trim() !== "";
+        const hasTemplates = Array.isArray(source.templates) && source.templates.length > 0;
+        return hasKey || hasTemplates ? config : null;
+    } catch {
+        return null;
+    }
 }
 
 /** What the browser is allowed to see: the key becomes a boolean. */
 export interface PublicConfig extends Omit<IntakeConfig, "llm"> {
+    /** Where the publishing tool is, from the launch environment (read-only). */
+    publisherUrl: string;
     llm: Omit<LlmConfig, "apiKey"> & { hasApiKey: boolean };
 }
 
-export function publicConfig(config: IntakeConfig): PublicConfig {
+export function publicConfig(config: IntakeConfig, publisherUrl: string): PublicConfig {
     const { apiKey, ...rest } = config.llm;
-    return { ...config, llm: { ...rest, hasApiKey: apiKey.trim() !== "" } };
+    return { ...config, publisherUrl, llm: { ...rest, hasApiKey: apiKey.trim() !== "" } };
 }
 
 /** Field-by-field validation of a PUT payload; the current config fills the gaps. */
@@ -174,27 +190,11 @@ export function mergeConfigPayload(current: IntakeConfig, payload: unknown): { c
     }
     const source = payload as Record<string, unknown>;
     const next: IntakeConfig = {
-        publisherUrl: current.publisherUrl,
         llm: { ...current.llm },
         templates: current.templates.map((item) => ({ ...item })),
-        templatesVersion: current.templatesVersion,
     };
-
-    if (source.publisherUrl !== undefined) {
-        const value = asString(source.publisherUrl, "").trim();
-        if (value === "") {
-            return { config: current, error: "publisherUrl 不能为空。" };
-        }
-        try {
-            const parsed = new URL(value);
-            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-                return { config: current, error: "publisherUrl 必须是 http(s) 地址。" };
-            }
-        } catch {
-            return { config: current, error: "publisherUrl 不是合法地址。" };
-        }
-        next.publisherUrl = value.replace(/\/+$/, "");
-    }
+    // publisherUrl is accepted and ignored: it is set when this process is
+    // launched, and the window shows it read-only.
 
     if (source.llm !== undefined) {
         if (source.llm === null || typeof source.llm !== "object" || Array.isArray(source.llm)) {
@@ -253,13 +253,12 @@ export function mergeConfigPayload(current: IntakeConfig, payload: unknown): { c
         if (!Array.isArray(source.templates)) {
             return { config: current, error: "templates 必须是数组。" };
         }
-        const parsed = source.templates.map(asTemplate).filter((item): item is Template => item !== null);
-        if (parsed.length === 0) {
-            return { config: current, error: "至少要保留一个提示词模板。" };
-        }
-        next.templates = parsed;
-        // Whatever the window saves is the current generation by definition.
-        next.templatesVersion = CURRENT_TEMPLATES_VERSION;
+        // An empty array is a legitimate state — the tool ships no presets, so
+        // "no templates yet" is where every fresh install starts — and it is
+        // also how the window clears the list. Entries that carry no id or no
+        // prompt are dropped rather than refused, the same tolerance the stored
+        // blob gets.
+        next.templates = source.templates.map(asTemplate).filter((item): item is Template => item !== null);
     }
 
     return { config: next, error: null };

@@ -18,6 +18,7 @@
         "test": "vitest run",
         "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.web.json",
         "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist-server/index.js --external:better-sqlite3 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+        "build:intake": "node scripts/build-intake.mjs",
         "app:dir": "node scripts/app-build.mjs dir",
         "app:win": "node scripts/app-build.mjs win",
         "native:node": "node scripts/native-sync.mjs node",
@@ -66,6 +67,7 @@
             "electron/**",
             "dist/**",
             "dist-server/**",
+            "dist-intake/**",
             "package.json"
         ],
         "asarUnpack": [

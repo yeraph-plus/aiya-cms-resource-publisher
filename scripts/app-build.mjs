@@ -10,7 +10,7 @@
  * then died on a NODE_MODULE_VERSION mismatch. The restore lives in a
  * `finally` here instead, so it runs on success, failure and interrupt alike.
  *
- * Usage: node scripts/app-build.mjs win|dir
+ * Usage: node scripts/app-build.mjs win|dir [outputDir]
  */
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -19,8 +19,9 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 const target = process.argv[2] ?? "win";
+const outputDir = process.argv[3];
 if (target !== "win" && target !== "dir") {
-    console.error("usage: node scripts/app-build.mjs win|dir");
+    console.error("usage: node scripts/app-build.mjs win|dir [outputDir]");
     process.exit(1);
 }
 
@@ -32,8 +33,9 @@ function run(command, args) {
 const chain = [
     ["npm", ["run", "build"]],
     ["npm", ["run", "build:server"]],
+    ["npm", ["run", "build:intake"]],
     ["npm", ["run", "native:electron"]],
-    ["node", ["scripts/build-app.mjs", target]],
+    ["node", ["scripts/build-app.mjs", target, ...(outputDir === undefined ? [] : [outputDir])]],
 ];
 
 let status = 0;

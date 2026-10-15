@@ -7,6 +7,7 @@ import {
     clearLogs,
     dbPath,
     deletePost,
+    getIntakeConfig,
     getPost,
     getSettings,
     getTermRefs,
@@ -19,6 +20,7 @@ import {
     listTermUsage,
     logEvent,
     parseSnapshot,
+    setIntakeConfig,
     setSetting,
     setTermRefs,
     updatePostRow,
@@ -45,6 +47,9 @@ import {
     todoGroupConfig,
 } from "../shared/fileserve.js";
 import { termPath, type TermOption } from "../shared/terms.js";
+
+/** The 智能摄取 configuration blob's cap: six prompt templates plus a key, with room to spare. */
+const INTAKE_CONFIG_LIMIT = 512 * 1024;
 
 export async function buildApp(): Promise<FastifyInstance> {
     const app = Fastify({ logger: false, bodyLimit: 16 * 1024 * 1024 });
@@ -483,6 +488,27 @@ function errorMessage(error: unknown): string {
             built.rows.map((row) => (todo !== null && row.fileserve === undefined ? { ...row, fileserve: todo } : row)),
         );
         return { imported: localIds.length, failed: built.errors.length, errors: built.errors, localIds };
+    });
+
+    // --- 摄取窗口自己的配置（存在本库，打包版因此只有一份数据）-----------------
+    // The intake process's only storage: its model, key and prompt templates as
+    // one JSON blob. The payload is opaque here on purpose — field-by-field
+    // validation belongs to intake/config.ts, the side that owns the shape —
+    // and the intake process is the only client: the window talks to it, it
+    // talks to these two routes.
+    app.get("/api/intake/config", async () => ({ payload: getIntakeConfig() }));
+
+    app.put("/api/intake/config", async (request, reply) => {
+        const body = (request.body ?? {}) as { payload?: unknown };
+        if (typeof body.payload !== "string" || body.payload.trim() === "") {
+            return reply.code(400).send({ error: "payload 必须是非空的配置 JSON 字符串。" });
+        }
+        if (body.payload.length > INTAKE_CONFIG_LIMIT) {
+            return reply.code(413).send({ error: `配置过大（上限 ${INTAKE_CONFIG_LIMIT} 字节）。` });
+        }
+        setIntakeConfig(body.payload);
+        logEvent("info", "摄取", "摄取窗口配置已更新（模型与提示词模板）");
+        return { ok: true };
     });
 
     // --- 摄取入口（智能摄取窗口 / 任意本机客户端）-----------------------------

@@ -90,12 +90,18 @@
             }
             main {
                 display: grid;
-                grid-template-columns: minmax(320px, 1fr) minmax(240px, 0.7fr) minmax(420px, 1.4fr);
+                /* Two working cards under the full-width config card: the corpus
+                   is the narrow, tall one and the draft editor is the wide one
+                   (title, body, and the six term grids). The old three-column
+                   track was sized for the image and manual-JSON cards that no
+                   longer exist, and it left the draft squeezed into the middle
+                   column with an empty column beside it. */
+                grid-template-columns: minmax(320px, 0.8fr) minmax(520px, 1.7fr);
                 gap: 12px;
                 padding: 12px;
                 align-items: start;
             }
-            @media (max-width: 1200px) {
+            @media (max-width: 1080px) {
                 main {
                     grid-template-columns: 1fr;
                 }
@@ -273,8 +279,8 @@
                 <h2>配置 · 发帖器与模型</h2>
                 <div class="config-grid">
                     <label>
-                        <span class="lbl">发帖器地址（摄取端点所在）</span>
-                        <input id="publisherUrl" placeholder="http://127.0.0.1:5175" />
+                        <span class="lbl">发帖器地址（由启动参数决定，配置也存在它那里）</span>
+                        <input id="publisherUrl" readonly />
                     </label>
                     <label>
                         <span class="lbl">协议</span>
@@ -310,15 +316,18 @@
                     <span id="proxyNote" class="hint"></span>
                 </div>
 
-                <h2 style="margin-top: 12px">提示词模板（可按内容类型切换）</h2>
+                <h2 style="margin-top: 12px">提示词模板（自己写，可按内容类型建多份）</h2>
                 <div class="row">
-                    <select id="editTemplate"></select>
+                    <select id="editTemplate" style="min-width: 160px"></select>
+                    <button id="newTemplate">新建模板</button>
+                    <button id="deleteTemplate" class="ghost">删除</button>
                     <input id="editLabel" placeholder="名称" style="width: 120px" />
-                    <input id="editHint" placeholder="索引来源提示" style="flex: 1; min-width: 200px" />
-                    <button id="saveTemplate">保存模板</button>
+                    <input id="editHint" placeholder="索引来源提示" style="flex: 1; min-width: 160px" />
+                    <button id="insertContract">插入输出契约</button>
+                    <button id="saveTemplate" class="primary">保存模板</button>
                 </div>
-                <textarea id="editPrompt"></textarea>
-                <p class="hint">模板保存在 intake.config.json；删掉该文件即可恢复内置模板。提示词里请保留 JSON 输出契约，否则结果无法解析。</p>
+                <textarea id="editPrompt" placeholder="在这里写你的提示词：这类资源怎么写标题、正文骨架、六个词法怎么挑。别忘了带上 JSON 输出契约（点上面的「插入输出契约」）。"></textarea>
+                <p class="hint">模板存在发帖器的数据库里（没有内置模板，全新安装是空的）。提示词里必须包含 JSON 输出契约，否则结果无法解析——「插入输出契约」会把必需的那段补齐。</p>
             </section>
 
             <section>
@@ -372,6 +381,8 @@
             const $ = (id) => document.getElementById(id);
             let config = null;
             let context = null;
+            /** The tool's output contract, fetched at boot and inserted on demand. */
+            let defaultContract = "";
             /** taxonomy -> Set(term id) the user has ticked. */
             let picked = {};
             /** taxonomy -> [name] model words outside the vocabulary (created on push). */
@@ -388,8 +399,15 @@
             }
             function busy(on) {
                 $("busy").classList.toggle("hidden", !on);
-                for (const id of ["generate", "preview", "publish", "saveConfig", "saveTemplate"]) {
+                for (const id of ["generate", "preview", "publish", "saveConfig", "saveTemplate", "newTemplate", "deleteTemplate"]) {
                     $(id).disabled = on;
+                }
+                if (!on && config) {
+                    // Generating needs a template, and there is no preset to fall
+                    // back on: an empty list keeps those two buttons off.
+                    const empty = config.templates.length === 0;
+                    $("generate").disabled = empty;
+                    $("deleteTemplate").disabled = empty;
                 }
             }
             async function api(path, options) {
@@ -417,9 +435,23 @@
             // ---- boot --------------------------------------------------------
             async function boot() {
                 try {
+                    // The tool's own copy of the output contract: what a template
+                    // must contain for an answer to parse. Fetched, never copied
+                    // into this page, so it cannot drift from the parser.
+                    const contract = await api("/api/output-contract");
+                    defaultContract = contract.contract || "";
+                } catch (error) {
+                    say("err", "读输出契约失败：" + error.message);
+                }
+                try {
                     config = await api("/api/config");
                 } catch (error) {
-                    say("err", "读配置失败：" + error.message);
+                    say(
+                        "err",
+                        "读配置失败：" +
+                            error.message +
+                            "—— 配置存在发帖器的数据库里，先启动发帖器（打包版直接开应用；仓库版 npm run dev）。",
+                    );
                     return;
                 }
                 renderConfig();
@@ -481,13 +513,19 @@
             }
 
             // ---- templates and config ---------------------------------------
+            /** The user's own templates; nothing is shipped as a default. */
             function renderTemplates() {
-                for (const [selectId, keep] of [
-                    ["template", $("template").value],
-                    ["editTemplate", $("editTemplate").value],
-                ]) {
+                const empty = config.templates.length === 0;
+                for (const selectId of ["template", "editTemplate"]) {
                     const select = $(selectId);
+                    const keep = select.value;
                     select.innerHTML = "";
+                    if (empty) {
+                        const option = document.createElement("option");
+                        option.value = "";
+                        option.textContent = "（还没有模板）";
+                        select.append(option);
+                    }
                     for (const template of config.templates) {
                         const option = document.createElement("option");
                         option.value = template.id;
@@ -498,6 +536,8 @@
                         select.value = keep;
                     }
                 }
+                $("generate").disabled = empty;
+                $("deleteTemplate").disabled = empty;
                 showSourceHint();
                 loadTemplateEditor();
             }
@@ -507,20 +547,101 @@
             }
             function showSourceHint() {
                 const template = currentTemplate();
-                $("sourceHint").textContent = template ? "索引来源：" + template.sourceHint : "";
+                $("sourceHint").textContent = template
+                    ? "索引来源：" + (template.sourceHint || "（未填）")
+                    : "还没有模板：在上面的配置卡片里「新建模板」，写好提示词再生成。";
             }
             function loadTemplateEditor() {
-                const template = config.templates.find((item) => item.id === $("editTemplate").value) || config.templates[0];
+                const template = config.templates.find((item) => item.id === $("editTemplate").value);
+                // An empty list still shows the editor: that is where the first
+                // template gets written.
+                $("editLabel").value = template ? template.label : "";
+                $("editHint").value = template ? template.sourceHint : "";
+                $("editPrompt").value = template ? template.prompt : "";
+            }
+
+            /** Persist the whole list; the process validates and stores it. */
+            async function putTemplates(templates, okText) {
+                busy(true);
+                try {
+                    config = await api("/api/config", {
+                        method: "PUT",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ templates }),
+                    });
+                    renderTemplates();
+                    say("ok", okText);
+                } catch (error) {
+                    say("err", "模板保存失败：" + error.message);
+                } finally {
+                    busy(false);
+                }
+            }
+
+            function newTemplate() {
+                const label = $("editLabel").value.trim() || "新模板";
+                const id = `custom-${Date.now().toString(36)}`;
+                const prompt = $("editPrompt").value.trim();
+                const templates = [
+                    ...config.templates,
+                    {
+                        id,
+                        label,
+                        sourceHint: $("editHint").value.trim(),
+                        // A prompt cannot be empty (the process drops those), and
+                        // the contract is what makes the answer parseable, so a
+                        // fresh template starts as just the contract.
+                        prompt: prompt === "" ? defaultContract : prompt,
+                    },
+                ];
+                void putTemplates(templates, `已新建模板「${label}」，记得按自己的写法补充提示词。`);
+            }
+
+            function deleteTemplate() {
+                const id = $("editTemplate").value;
+                const template = config.templates.find((item) => item.id === id);
                 if (!template) {
+                    say("warn", "没有可删除的模板。");
                     return;
                 }
-                $("editLabel").value = template.label;
-                $("editHint").value = template.sourceHint;
-                $("editPrompt").value = template.prompt;
+                const templates = config.templates.filter((item) => item.id !== id);
+                void putTemplates(templates, `已删除模板「${template.label}」。`);
+            }
+
+            function insertContract() {
+                const textarea = $("editPrompt");
+                const text = textarea.value;
+                if (text.includes("【输出格式】")) {
+                    say("warn", "提示词里已经有输出契约了。");
+                    return;
+                }
+                textarea.value = text.trim() === "" ? defaultContract : text.replace(/\s+$/, "") + "\n\n" + defaultContract;
+                say("info", "输出契约已插入，保存模板后生效。");
+            }
+
+            async function saveTemplate() {
+                const id = $("editTemplate").value;
+                const prompt = $("editPrompt").value.trim();
+                if (prompt === "") {
+                    say("warn", "提示词不能为空：写一段，或点「插入输出契约」再保存。");
+                    return;
+                }
+                if (config.templates.some((item) => item.id === id)) {
+                    const label = $("editLabel").value.trim() || id;
+                    const templates = config.templates.map((item) =>
+                        item.id === id
+                            ? { id, label, sourceHint: $("editHint").value.trim(), prompt }
+                            : item,
+                    );
+                    await putTemplates(templates, `模板「${label}」已保存。`);
+                    return;
+                }
+                // No template is selected (empty list): saving here creates one.
+                newTemplate();
             }
 
             function renderConfig() {
-                $("publisherUrl").value = config.publisherUrl;
+                $("publisherUrl").value = config.publisherUrl || "";
                 $("provider").value = config.llm.provider;
                 $("baseUrl").value = config.llm.baseUrl;
                 $("model").value = config.llm.model;
@@ -539,7 +660,6 @@
                         method: "PUT",
                         headers: { "content-type": "application/json" },
                         body: JSON.stringify({
-                            publisherUrl: $("publisherUrl").value,
                             llm: {
                                 provider: $("provider").value,
                                 baseUrl: $("baseUrl").value,
@@ -553,38 +673,10 @@
                     });
                     renderConfig();
                     renderTemplates();
-                    say("ok", "配置已保存。");
+                    say("ok", "配置已保存（存在发帖器的数据库里）。");
                     await loadContext();
                 } catch (error) {
                     say("err", "保存配置失败：" + error.message);
-                } finally {
-                    busy(false);
-                }
-            }
-
-            async function saveTemplate() {
-                const id = $("editTemplate").value;
-                const templates = config.templates.map((template) =>
-                    template.id === id
-                        ? {
-                              id,
-                              label: $("editLabel").value.trim() || template.label,
-                              sourceHint: $("editHint").value.trim(),
-                              prompt: $("editPrompt").value,
-                          }
-                        : template,
-                );
-                busy(true);
-                try {
-                    config = await api("/api/config", {
-                        method: "PUT",
-                        headers: { "content-type": "application/json" },
-                        body: JSON.stringify({ templates }),
-                    });
-                    renderTemplates();
-                    say("ok", "模板已保存。");
-                } catch (error) {
-                    say("err", "保存模板失败：" + error.message);
                 } finally {
                     busy(false);
                 }
@@ -865,6 +957,9 @@
             $("editTemplate").onchange = loadTemplateEditor;
             $("saveConfig").onclick = saveConfig;
             $("saveTemplate").onclick = saveTemplate;
+            $("newTemplate").onclick = newTemplate;
+            $("deleteTemplate").onclick = deleteTemplate;
+            $("insertContract").onclick = insertContract;
             $("usePublisherProxy").onchange = renderProxyInfo;
             $("generate").onclick = generate;
             $("preview").onclick = preview;

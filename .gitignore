@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-server/
+dist-intake/
 release/
 publisher.db
 publisher.db-*
