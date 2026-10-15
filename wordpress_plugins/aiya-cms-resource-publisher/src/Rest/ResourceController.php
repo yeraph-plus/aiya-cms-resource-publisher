@@ -141,6 +141,9 @@ final class ResourceController
                         'id' => (int) $term->term_id,
                         'name' => $term->name,
                         'slug' => $term->slug,
+                        // Hierarchical taxonomies (分类) need the parent to be
+                        // renderable as a tree; 0 = top level.
+                        'parent' => (int) $term->parent,
                         'count' => (int) $term->count,
                     ];
                 }

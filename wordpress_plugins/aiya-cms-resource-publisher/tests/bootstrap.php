@@ -113,6 +113,7 @@ final class WP_Term
         public string $slug,
         public string $taxonomy,
         public int $count = 0,
+        public int $parent = 0,
     ) {}
 }
 
