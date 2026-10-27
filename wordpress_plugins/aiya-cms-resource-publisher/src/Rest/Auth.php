@@ -14,7 +14,21 @@ use WP_Error;
  */
 final class Auth
 {
-    public static function require(string $capability): bool|WP_Error
+    /**
+     * The floor for the whole surface: editors and administrators only.
+     *
+     * This is an editorial tool, not an authoring one. The list route exposes
+     * the entire library including other people's drafts, so the gate has to
+     * be role-level (`edit_others_posts`) rather than per-object `edit_posts`:
+     * a contributor or author account holding an application password would
+     * otherwise read drafts, private posts and their download payloads by id.
+     * Editor in a stock WordPress install carries `edit_others_posts`,
+     * `publish_posts`, `read_private_posts` and `upload_files`; an
+     * administrator carries all of them too.
+     */
+    public const EDITOR = 'edit_others_posts';
+
+    public static function require(string ...$capabilities): bool|WP_Error
     {
         if (!is_user_logged_in()) {
             return new WP_Error(
@@ -24,12 +38,14 @@ final class Auth
             );
         }
 
-        if (!current_user_can($capability)) {
-            return new WP_Error(
-                'aiya_publish_forbidden',
-                __('Your account does not have the required capability.', 'aiya-publish'),
-                ['status' => 403],
-            );
+        foreach ($capabilities as $capability) {
+            if (!current_user_can($capability)) {
+                return new WP_Error(
+                    'aiya_publish_forbidden',
+                    __('Your account does not have the required capability.', 'aiya-publish'),
+                    ['status' => 403],
+                );
+            }
         }
 
         return true;

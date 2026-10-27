@@ -27,7 +27,7 @@ final class UploadsControllerTest extends TestCase
     {
         aiya_publish_test_reset();
         $GLOBALS['__test']['routes'] = [];
-        $GLOBALS['__test']['caps'] = ['edit_posts', 'upload_files'];
+        $GLOBALS['__test']['caps'] = ['edit_others_posts', 'upload_files'];
     }
 
     /** @return array<string, mixed> The route table entry as recorded. */
@@ -69,9 +69,10 @@ final class UploadsControllerTest extends TestCase
 
         self::assertTrue($permission());
 
-        // A logged-in account without upload_files — the admin pic-bed
-        // screen's gate, and therefore this route's.
-        $GLOBALS['__test']['caps'] = ['edit_posts'];
+        // A logged-in account with the editorial floor but without
+        // upload_files — the admin pic-bed screen's gate, and therefore this
+        // route's.
+        $GLOBALS['__test']['caps'] = ['edit_others_posts'];
         $refused = $permission();
         self::assertInstanceOf(WP_Error::class, $refused);
         self::assertSame(403, $refused->get_error_data()['status']);

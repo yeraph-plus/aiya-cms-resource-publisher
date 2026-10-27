@@ -44,7 +44,7 @@ final class UploadsController
             'callback' => fn (WP_REST_Request $request): WP_Error|WP_REST_Response => $this->upload($request),
             // The admin pic-bed screen's capability; every author-level account
             // has it, so the tool's credentials can carry the upload too.
-            'permission_callback' => fn (): bool|WP_Error => Auth::require('upload_files'),
+            'permission_callback' => fn (): bool|WP_Error => Auth::require(Auth::EDITOR, 'upload_files'),
         ]);
     }
 

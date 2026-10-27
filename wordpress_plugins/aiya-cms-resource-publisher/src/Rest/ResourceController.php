@@ -29,7 +29,7 @@ final class ResourceController
             [
                 'methods' => WP_REST_Server::READABLE,
                 'callback' => fn (): WP_REST_Response => $this->ping(),
-                'permission_callback' => fn (): bool|WP_Error => Auth::require('edit_posts'),
+                'permission_callback' => fn (): bool|WP_Error => Auth::require(Auth::EDITOR),
             ],
         ]);
 
@@ -37,7 +37,7 @@ final class ResourceController
             [
                 'methods' => WP_REST_Server::READABLE,
                 'callback' => fn (): WP_REST_Response => $this->taxonomies(),
-                'permission_callback' => fn (): bool|WP_Error => Auth::require('edit_posts'),
+                'permission_callback' => fn (): bool|WP_Error => Auth::require(Auth::EDITOR),
             ],
         ]);
 
@@ -45,7 +45,7 @@ final class ResourceController
             [
                 'methods' => WP_REST_Server::READABLE,
                 'callback' => fn (): WP_REST_Response => $this->users(),
-                'permission_callback' => fn (): bool|WP_Error => Auth::require('edit_posts'),
+                'permission_callback' => fn (): bool|WP_Error => Auth::require(Auth::EDITOR),
             ],
         ]);
 
@@ -53,7 +53,7 @@ final class ResourceController
             [
                 'methods' => WP_REST_Server::READABLE,
                 'callback' => fn (WP_REST_Request $request): WP_REST_Response|WP_Error => $this->listPosts($request),
-                'permission_callback' => fn (): bool|WP_Error => Auth::require('edit_posts'),
+                'permission_callback' => fn (): bool|WP_Error => Auth::require(Auth::EDITOR),
                 'args' => [
                     'page' => ['type' => 'integer', 'default' => 1, 'minimum' => 1],
                     'per_page' => ['type' => 'integer', 'default' => 20, 'minimum' => 1, 'maximum' => 100],
@@ -63,7 +63,7 @@ final class ResourceController
             [
                 'methods' => WP_REST_Server::CREATABLE,
                 'callback' => fn (WP_REST_Request $request): WP_REST_Response|WP_Error => $this->create($request),
-                'permission_callback' => fn (): bool|WP_Error => Auth::require('edit_posts'),
+                'permission_callback' => fn (): bool|WP_Error => Auth::require(Auth::EDITOR),
             ],
         ]);
 
@@ -71,13 +71,13 @@ final class ResourceController
             [
                 'methods' => WP_REST_Server::READABLE,
                 'callback' => fn (WP_REST_Request $request): WP_REST_Response|WP_Error => $this->single($request),
-                'permission_callback' => fn (): bool|WP_Error => Auth::require('edit_posts'),
+                'permission_callback' => fn (): bool|WP_Error => Auth::require(Auth::EDITOR),
                 'args' => ['id' => ['type' => 'integer', 'minimum' => 1]],
             ],
             [
                 'methods' => WP_REST_Server::EDITABLE,
                 'callback' => fn (WP_REST_Request $request): WP_REST_Response|WP_Error => $this->update($request),
-                'permission_callback' => fn (): bool|WP_Error => Auth::require('edit_posts'),
+                'permission_callback' => fn (): bool|WP_Error => Auth::require(Auth::EDITOR),
                 'args' => ['id' => ['type' => 'integer', 'minimum' => 1]],
             ],
         ]);
