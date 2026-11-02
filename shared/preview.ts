@@ -6,6 +6,12 @@
  * browser refuses to load `file://` subresources from an http page — the
  * stored source keeps the real path, the preview gets a URL it can show.
  *
+ * Paragraphs are rebuilt from blank lines, the way WordPress does it. The
+ * site's body is `wpautop`'d on render and WP stores no `<p>`, so most
+ * sources are plain text with blank lines between paragraphs — shown raw, a
+ * browser would collapse every one of them into a single run-on paragraph and
+ * the preview would misrepresent the post it exists to check.
+ *
  * Everything else is passed through untouched: the source comes from the site,
  * a CSV or an agent, so it may well contain script. Isolation is the caller's
  * job (a `sandbox`ed iframe without `allow-scripts`), not a sanitizer's — a
@@ -20,6 +26,49 @@ export interface PreviewOptions {
     siteUrl: string;
     /** Absolute URL the preview can load for a staged file on this machine. */
     localImageUrl: (path: string) => string;
+}
+
+/**
+ * A chunk that already opens on markup is left alone: it is either a block the
+ * author wrote (`<ul>`, `<blockquote>`, `<hr />`) or a `<p>` from stored data,
+ * and wrapping it again would nest a paragraph inside a paragraph. A shortcode
+ * is left alone too — it is replaced at render time on the site, and wrapping
+ * it in a `<p>` here would show the literal tag inside a paragraph of its own.
+ */
+const ALREADY_MARKUP = /^<(\/?)(p|h[1-6]|ul|ol|li|dl|dt|dd|blockquote|hr|img|figure|figcaption|table|thead|tbody|tr|td|th|div|details|summary|pre|section|article|alert)\b/i;
+
+/**
+ * Rebuilds paragraphs and line breaks the way `wpautop` does: a blank line
+ * starts a new paragraph, a single newline is a `<br />`.
+ */
+export function paragraphize(content: string): string {
+    return content
+        .split(/\r?\n[ \t]*\r?\n/)
+        .map((chunk) => chunk.trim())
+        .filter((chunk) => chunk !== "")
+        .map((chunk) => {
+            if (ALREADY_MARKUP.test(chunk) || chunk.startsWith("[")) {
+                return chunk;
+            }
+            return `<p>${chunk.replace(/[ \t]*\r?\n[ \t]*/g, "<br />\n")}</p>`;
+        })
+        .join("\n");
+}
+
+/**
+ * A blockquote holds one field per line and the site turns those into `<br />`
+ * too (`wpautop` does not skip blockquotes). Plain text inside one is folded
+ * onto a single line by the browser otherwise, which makes a specs block look
+ * like a run-on sentence in the preview only.
+ */
+function breakLinesInBlockquotes(html: string): string {
+    return html.replace(/<blockquote(?:\s[^>]*)?>([\s\S]*?)<\/blockquote>/gi, (whole, inner: string) => {
+        if (/<p[\s>]|<\/p>|<br\s*\/?>/i.test(inner)) {
+            return whole;
+        }
+        const broken = inner.trim().replace(/[ \t]*\r?\n[ \t]*/g, "<br />\n");
+        return whole.replace(inner, broken);
+    });
 }
 
 const STYLE = `
@@ -50,7 +99,10 @@ export function buildPreviewDoc(content: string, options: PreviewOptions): strin
     }
     // A link would navigate this frame away from the preview (and popups are
     // sandboxed off), so the target goes and the text stays.
-    const body = replaceImageSources(content, mapping).replace(/<a\b[^>]*>/gi, "<a>");
+    const body = replaceImageSources(breakLinesInBlockquotes(paragraphize(content)), mapping).replace(
+        /<a\b[^>]*>/gi,
+        "<a>",
+    );
     const site = options.siteUrl.trim().replace(/\/+$/, "");
     const base = site === "" ? "" : `<base href="${escapeAttribute(site)}/">`;
     return `<!doctype html>
