@@ -33,7 +33,6 @@ function run(command, args) {
 const chain = [
     ["npm", ["run", "build"]],
     ["npm", ["run", "build:server"]],
-    ["npm", ["run", "build:intake"]],
     ["npm", ["run", "native:electron"]],
     ["node", ["scripts/build-app.mjs", target, ...(outputDir === undefined ? [] : [outputDir])]],
 ];

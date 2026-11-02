@@ -190,8 +190,8 @@ describe("ingest endpoints", () => {
         expect(body.defaultStatus).toBe("draft");
         expect(body.ingestMaxRows).toBe(INGEST_MAX_ROWS);
         expect(body.netdiskOptions.map((option: { id: string }) => option.id)).toEqual(["baidu", "quark"]);
-        // The proxy rides along so the intake window can show where the model
-        // call goes; the setting is empty here, which reads as direct.
+        // The proxy rides along so a client can show where its outbound calls
+        // go; the setting is empty here, which reads as direct.
         expect(body.proxyUrl).toBe("");
         expect(body.netdiskTodo).toEqual({ enabled: false, groups: [] });
         expect(body.terms.resource_category).toEqual([
@@ -200,9 +200,9 @@ describe("ingest endpoints", () => {
         ]);
     });
 
-    it("accepts a request from the intake window's own origin and rejects other sites", async () => {
-        // The isolated intake process serves its page from 127.0.0.1:5180 and
-        // calls this endpoint from the browser: a different port, same host.
+    it("accepts a same-host request from another local port and rejects other sites", async () => {
+        // A local UI served from its own port (say 127.0.0.1:5180) calls this
+        // endpoint from the browser: a different port, same host.
         const window = await app.inject({
             method: "GET",
             url: "/api/ingest/context",
@@ -247,7 +247,7 @@ describe("ingest endpoints", () => {
             method: "POST",
             url: "/api/ingest",
             payload: {
-                source: "intake",
+                source: "external",
                 rows: [
                     {
                         title: "摄取甲",
@@ -283,7 +283,7 @@ describe("ingest endpoints", () => {
         const logs = db.listLogs(0, 100);
         const messages = logs.map((entry) => entry.message);
         expect(logs.some((entry) => entry.scope === "摄取")).toBe(true);
-        expect(messages.some((message) => message.includes("来源 intake"))).toBe(true);
+        expect(messages.some((message) => message.includes("来源 external"))).toBe(true);
     });
 
     it("answers 400 with the payload-level reason and writes nothing", async () => {
@@ -383,7 +383,7 @@ describe("ingest endpoints", () => {
         const res = await app.inject({
             method: "POST",
             url: "/api/ingest",
-            payload: { source: "intake", rows: [{ title: "待办组甲" }, { title: "自带文件", fileserve: null }] },
+            payload: { source: "external", rows: [{ title: "待办组甲" }, { title: "自带文件", fileserve: null }] },
         });
         expect(res.statusCode).toBe(200);
         const state = await app.inject({ method: "GET", url: "/api/state" });

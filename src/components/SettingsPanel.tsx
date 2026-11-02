@@ -183,7 +183,7 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
                         ))}
                     </div>
                     <span className="col-span-2 text-xs text-neutral-500">
-                        只挂「空链接」的网盘组，不随推送上行——推送会过滤掉空链接组，所以不会发出无效下载项；等网盘脚本回填后由你在表格里点推送。覆盖 智能摄取 入队、CSV 导入 与「新建行」三条新建路径。
+                        只挂「空链接」的网盘组，不随推送上行——推送会过滤掉空链接组，所以不会发出无效下载项；等网盘脚本回填后由你在表格里点推送。覆盖 摄取 入队、CSV 导入 与「新建行」三条新建路径。
                     </span>
                 </div>
 

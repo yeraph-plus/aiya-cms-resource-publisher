@@ -18,22 +18,20 @@ npm run build && npm start   # 单进程 http://localhost:5175
 ## 桌面应用打包（Electron）
 
 ```bash
-npm run app:win    # vite build + 服务端/摄取 esbuild bundle + 切换 electron ABI + electron-builder → release/ + 还原 node ABI
+npm run app:win    # vite build + 服务端 esbuild bundle + 切换 electron ABI + electron-builder → release/ + 还原 node ABI
 npm run app:dir    # 同上但只出免安装目录：release/win-unpacked/AIYA发帖器.exe（便携版，拷走即用）
 ```
 
-两个形态都包含**发帖器窗口与智能摄取窗口**：摄取进程由 `npm run build:intake`（`scripts/build-intake.mjs`，esbuild 打 `intake/index.ts` → `dist-intake/index.js` + 拷 `page.html`）产出、进 `build.files`，Electron 主进程启动时用 `fork` + `ELECTRON_RUN_AS_NODE` 把 `dist-intake/index.js` 当普通 Node 子进程拉起（打包版没有独立 node.exe），退出时杀掉；主窗口那个「智能摄取」按钮打开的是**应用内的第二个窗口**（不是系统浏览器），已经开着就聚焦它。摄取配置（模型、密钥、提示词模板）存在 `publisher.db` 的 `intake_config` 表里，所以打包版只有一份数据；首次启动若数据目录里还留着旧的 `intake.config.json`，会被导入一次后不再读取（文件原样保留）。
-
 产物在 `release/`：NSIS 安装包 `AIYA发帖器 Setup <版本>.exe`（`oneClick: false` + `allowToChangeInstallationDirectory: true`，向导里可选安装目录），`app:dir` 另出免安装目录 `release/win-unpacked/`。**Windows 不打 `portable` 单文件目标**：它会让 makensis 把整份 `app-64.7z` 重新压进那个自解压 exe（portable 走 `portable.nsi`，electron-builder 的注释即「NSIS recompresses the archive」），这一趟压缩就是打包耗时的大头；要免安装就用 `app:dir` 的目录形态（拷贝即用，等价物）。**better-sqlite3 的双 ABI 由 `scripts/native-sync.mjs` 自动切换**（`.native/{node,electron}/better_sqlite3.node` 两份归档，node_modules 常态保持 Node ABI 供 vitest/tsx，打包窗口期临时换 Electron ABI）；下载 URL 由 `scripts/build-app.mjs` 钉死，保证缓存键稳定命中。整条打包链由 `scripts/app-build.mjs` 托管：**无论成功、失败还是中断，收尾时都会还原 Node ABI**（`finally` 语义），因此一次失败的 electron-builder（工具集拉不到、磁盘不足、Ctrl+C）不会把 `node_modules` 留在 Electron ABI 上而让后续 `npm test` 报 `NODE_MODULE_VERSION` 不匹配。若仍怀疑 ABI 状态，手工跑一次 `npm run native:node` 即可。首次打包要点：
 
-- 服务端用 esbuild 打成单文件 `dist-server/index.js`（CJS 依赖需 `--banner:js` 注入 `createRequire`；`better-sqlite3` 保持 external），Electron 主进程 `electron/main.mjs` 用同一条 portguard 链路把它绑在**固定 5175**（与 dev/`npm start` 同端口——油猴脚本据此定位客户端）并开窗口加载；数据库落在 `%APPDATA%/aiya-publisher/data/publisher.db`。摄取窗口同样打单文件 `dist-intake/index.js`（`page.html` 拷到同目录，进程按自身 module URL 读它），由主进程 fork 到 **固定 5180** 并随退出杀掉。
+- 服务端用 esbuild 打成单文件 `dist-server/index.js`（CJS 依赖需 `--banner:js` 注入 `createRequire`；`better-sqlite3` 保持 external），Electron 主进程 `electron/main.mjs` 用同一条 portguard 链路把它绑在**固定 5175**（与 dev/`npm start` 同端口——油猴脚本据此定位客户端）并开窗口加载；数据库落在 `%APPDATA%/aiya-publisher/data/publisher.db`。
 - **electron 版本必须精确钉死**（`42.11.8`，范围值会让 electron-builder 拒绝工作），且 `npmRebuild: false`——本机没有 MSVC 工具链，better-sqlite3 用 **Electron ABI 的 prebuild**：进入 `node_modules/better-sqlite3` 执行 `npx prebuild-install --runtime electron --target <electron版本>`，GitHub 不通时从 npmmirror 手动取 `https://registry.npmmirror.com/-/binary/better-sqlite3/v<版本>/better-sqlite3-v<版本>-electron-v<ABI>-win32-x64.tar.gz` 解到包根（ABI 映射用 node-abi 查：electron 42 → 146；升级 electron 主版本必须重取对应 ABI）。
 - **网络受限时的工具包下载**：electron-builder 首次打包要从 GitHub 拉 winCodeSign/nsis 工具集。TUN/系统代理只救得了 curl 救不了 node 时，用 curl 把 `winCodeSign-2.6.0.7z`、`nsis-3.0.4.1.7z`、`nsis-resources-3.4.1.7z` 下载到本地目录，`python -m http.server 80 --directory <目录>` 起本地镜像（**必须 80 端口**：缓存目录名取自 URL host:port，冒号在 Windows 非法），再以 `ELECTRON_BUILDER_BINARIES_ALLOW_HTTP=true ELECTRON_BUILDER_BINARIES_DOWNLOAD_OVERRIDE_URL=http://localhost` 打包；三个 7z 同时平铺一份到目录根（两条取用路径都要能命中）。
 - 渲染层依赖（react/ag-grid）在 devDependencies——只参与 vite 构建；打进安装包的 dependencies 仅剩 fastify/@fastify/static/better-sqlite3/undici。
 
 首次使用：右上「设置」打开模态框 → 填站点地址 / 用户名 / 应用密码 → 「测试连接」（用表单当前值探测，不落库）→ 「保存」→「同步」。应用密码在 WP 后台（用户 → 资料 → 应用密码）生成；推荐编辑/管理员级账号（可代发任意作者，无该能力只能存草稿/署名自己）。
 
-- **HTTP 代理**：设置里的「HTTP 代理」（如 `http://127.0.0.1:7890`，支持 `user:pass@host:port`）作用于发帖器的全部出站站点请求（连接测试/同步/推送），改完即生效；本地界面与数据库不受影响。智能摄取窗口的模型调用默认也走它（窗口里的开关可关掉改为直连），地址仍只在这里维护一份。
+- **HTTP 代理**：设置里的「HTTP 代理」（如 `http://127.0.0.1:7890`，支持 `user:pass@host:port`）作用于发帖器的全部出站站点请求（连接测试/同步/推送），改完即生效；本地界面与数据库不受影响。
 - **作者**：同步时从站点 `GET /users` 拉取全部可发帖账号（author 及以上），默认作者在设置里选，已有文章在详情面板随时切换（代发需账号有 `edit_others_posts`）。
 
 ## 使用语义
@@ -59,9 +57,9 @@ npm run app:dir    # 同上但只出免安装目录：release/win-unpacked/AIYA�
 - 本地删行只删本地记录，**不删除线上帖子**。
 - **UI 约定**：无嵌套模态框——表格行内编辑 + 右侧详情面板承载主编辑面；弹层只允许单层（设置、CSV 导入等）。
 
-## 智能摄取入口（/api/ingest，给外部整理器用）
+## 摄取入口（/api/ingest，给外部整理器用）
 
-「一段原始语料 → 一条结构化草稿」这段活由外部进程做，发帖器只留一个固定的结构化入口：它不含任何模型代码、不存任何密钥、不加任何依赖，收到的是已经成形的行。当前配套整理器是 `intake/`（独立进程 + 自己的窗口，见 `intake/README.md`，主窗口操作栏的「智能摄取」按钮直接开它），入口本身对任何本机客户端一视同仁——脚本、油猴也可以直接打。三个端点：
+「一段原始语料 → 一条结构化草稿」这段活由外部进程做，发帖器只留一个固定的结构化入口：它不含任何模型代码、不存任何密钥、不加任何依赖，收到的是已经成形的行。整理器不是本仓库的一部分——脚本、油猴、外部 agent 都可以直接打，入口对任何本机客户端一视同仁。三个端点：
 
 - `GET /api/ingest/context`：一次拿全做草稿要用的参照——六个词法的全部术语（**按本地已同步行的引用次数降序**，供「优先用站点已有的词」；层级词法另带 `parent` 与 `path`「父 / 子」）、作者名单、默认作者、新行默认状态、HTTP 代理地址、网盘注册表与「挂网盘待办组」当前选择、目标站点地址与同步游标、单次行数上限。刻意比 `/api/state` 小得多：不含任何行的正文，也不含应用密码。
 - `POST /api/ingest/preview`：用同一份纯函数做校验与归一化，**不写库**；返回折叠后的行、逐行错误与逐行提示（`warnings`，目前用于「同名术语取哪一个」）。术语引用是原始 ref：纯数字 = 命中既有术语 id，`name:` 前缀 = 推送时由站点创建（需要 `manage_terms`）。
@@ -69,16 +67,13 @@ npm run app:dir    # 同上但只出免安装目录：release/win-unpacked/AIYA�
 
 行字段：`title`（必填）/ `content`（HTML）/ `status`（**可选**；缺省 = 设置里的新行默认状态；`future` 必须带 `dateLocal`）/ `dateLocal`（可选，墙钟 `YYYY-MM-DDTHH:mm`，不做时区换算；不填就不携带日期，站点的刷时间规则照旧）/ `authorId`（可选，id 或显示名，缺省用默认作者）/ `terms`（六个词法 → 名称或 id 数组）/ `fileserve`（组对象，与详情面板同一套归一化：未知键丢弃、缺省补默认、price 折非负 int；**省略该字段 = 挂上设置里的网盘待办组，显式 `null` = 这一行不要文件列表**）。单次上限 500 行，与 CSV 导入共用同一批归一化函数（`shared/import.ts` + `shared/ingest.ts`），预览显示的就是写入会得到的东西。
 
-**图片不走这个入口**：正文图片由主窗口的拖放区上传并插到正文最前（见「正文插图」），摄取入口只收文字与标签；本机守卫照旧作用于这三个端点：跨站页面既过不了 Host/Origin 校验，也拿不到 CORS 头；因此配套整理器把发帖器调用**在自己进程里重新发出**，浏览器只与整理器同源通信。
-
-整理器自己的配置（模型、密钥、提示词模板）也走这两个端点，**存在本库里**，所以打包版只有一份数据：`GET /api/intake/config` 取整份 blob（没存过就是 `payload: null`），`PUT /api/intake/config` 用 `{ payload: "<JSON 字符串>" }` 整份覆盖（非空、≤512 KB）。blob 在这里是不透明的——字段级校验归 `intake/config.ts`，摄取进程是它唯一的客户端，窗口只跟摄取进程打交道；日志 scope 仍是「摄取」。
+**图片不走这个入口**：正文图片由主窗口的拖放区上传并插到正文最前（见「正文插图」），摄取入口只收文字与标签；本机守卫照旧作用于这三个端点：跨站页面既过不了 Host/Origin 校验，也拿不到 CORS 头。守卫对**没有 Origin 头**的请求放行（Host 仍必须是本机），所以以本机进程身份直连的整理器不需要任何额外适配，浏览器不参与这条链路。
 
 ## 数据（publisher.db，SQLite / WAL）
 
-- `settings`：站点地址、用户名、应用密码（**本地明文**，本机工具可接受，勿把 db 文件提交或外传）、HTTP 代理、默认作者、同步游标、本地目录创建根、目录命名后缀、**新行默认状态**（草稿/发布，作用于智能摄取与「新建行」）、**挂网盘待办组**（开关 + 白名单多选，作用于摄取 / CSV 导入 / 新建行三条新建路径：新行会带上所选网盘的空链接组，等脚本回填；空链接组不随推送上行）
+- `settings`：站点地址、用户名、应用密码（**本地明文**，本机工具可接受，勿把 db 文件提交或外传）、HTTP 代理、默认作者、同步游标、本地目录创建根、目录命名后缀、**新行默认状态**（草稿/发布，作用于摄取与「新建行」）、**挂网盘待办组**（开关 + 白名单多选，作用于摄取 / CSV 导入 / 新建行三条新建路径：新行会带上所选网盘的空链接组，等脚本回填；空链接组不随推送上行）
 - `authors` / `terms`：作者登记表（同步自动收录 + 手工备注）、词法术语缓存（含层级词法的 `parent`，老库缺列由启动时的守卫式迁移补 0，下次同步回填真实父级）
 - `posts` + `post_terms`：行状态（含 dirty/conflict/missing 标记、last_error、快照 JSON、`date_gmt` 站点回执时间戳）、线上 slug（取自 permalink）、fileserve 整份 JSON 与术语引用（`fileserve_pushed_digest` 已随徽章改版退役：老库残留列 inert，不再读写）
-- `intake_config`：单行（`id = 1`）的智能摄取配置 blob——模型、密钥、六份提示词模板。放在这里而不是旁边一个文件，是为了让打包版只有一份数据可备份/搬迁/删除；本进程不解析它，形状归 `intake/config.ts`
 - `logs`：运行日志（level/scope/ref/message，滚动保留 2000 条）。本地目录不在 SQL 里——目录名可由帖子 ID 推导，文件系统即真源。
 
 `PUBLISHER_DATA` 环境变量可重定向数据目录（默认进程工作目录）。

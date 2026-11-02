@@ -64,14 +64,6 @@ CREATE TABLE IF NOT EXISTS logs (
     ref INTEGER,
     message TEXT NOT NULL
 );
--- The 智能摄取 window's own configuration (model, key, prompt templates) as
--- one opaque JSON row. It lives here rather than in a file so the packaged app
--- has exactly one data store to back up, move or delete. This process never
--- parses it: intake/config.ts owns the shape, this side owns the bytes.
-CREATE TABLE IF NOT EXISTS intake_config (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    payload TEXT NOT NULL
-);
 `);
 
 // Databases from before slug capture lack the column; the guarded ALTER is
@@ -101,18 +93,6 @@ export function setSetting(key: string, value: string | null): void {
     db.prepare(
         "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     ).run(key, value);
-}
-
-/** The 智能摄取 configuration blob as stored, or null when never saved. */
-export function getIntakeConfig(): string | null {
-    const row = db.prepare("SELECT payload FROM intake_config WHERE id = 1").get() as { payload: string } | undefined;
-    return row?.payload ?? null;
-}
-
-export function setIntakeConfig(payload: string): void {
-    db.prepare(
-        "INSERT INTO intake_config (id, payload) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
-    ).run(payload);
 }
 
 export interface SettingsShape {
@@ -430,9 +410,9 @@ export function listTerms(): { taxonomy: string; id: number; name: string; slug:
 
 /**
  * How often each known term id is referenced by the local rows, keyed
- * "taxonomy:term_id". This is the ingest vocabulary's usefulness ranking: the
- * intake prompt tells the model to prefer what the site already uses, and a
- * `name:` reference is not an id, so it is skipped by the glob.
+ * "taxonomy:term_id". This is the ingest vocabulary's usefulness ranking: what
+ * the site already uses most is what a draft should prefer, and a `name:`
+ * reference is not an id, so it is skipped by the glob.
  */
 export function listTermUsage(): Map<string, number> {
     const rows = db

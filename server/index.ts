@@ -7,7 +7,6 @@ import {
     clearLogs,
     dbPath,
     deletePost,
-    getIntakeConfig,
     getPost,
     getSettings,
     getTermRefs,
@@ -20,7 +19,6 @@ import {
     listTermUsage,
     logEvent,
     parseSnapshot,
-    setIntakeConfig,
     setSetting,
     setTermRefs,
     updatePostRow,
@@ -47,9 +45,6 @@ import {
     todoGroupConfig,
 } from "../shared/fileserve.js";
 import { termPath, type TermOption } from "../shared/terms.js";
-
-/** The 智能摄取 configuration blob's cap: six prompt templates plus a key, with room to spare. */
-const INTAKE_CONFIG_LIMIT = 512 * 1024;
 
 export async function buildApp(): Promise<FastifyInstance> {
     const app = Fastify({ logger: false, bodyLimit: 16 * 1024 * 1024 });
@@ -490,29 +485,8 @@ function errorMessage(error: unknown): string {
         return { imported: localIds.length, failed: built.errors.length, errors: built.errors, localIds };
     });
 
-    // --- 摄取窗口自己的配置（存在本库，打包版因此只有一份数据）-----------------
-    // The intake process's only storage: its model, key and prompt templates as
-    // one JSON blob. The payload is opaque here on purpose — field-by-field
-    // validation belongs to intake/config.ts, the side that owns the shape —
-    // and the intake process is the only client: the window talks to it, it
-    // talks to these two routes.
-    app.get("/api/intake/config", async () => ({ payload: getIntakeConfig() }));
-
-    app.put("/api/intake/config", async (request, reply) => {
-        const body = (request.body ?? {}) as { payload?: unknown };
-        if (typeof body.payload !== "string" || body.payload.trim() === "") {
-            return reply.code(400).send({ error: "payload 必须是非空的配置 JSON 字符串。" });
-        }
-        if (body.payload.length > INTAKE_CONFIG_LIMIT) {
-            return reply.code(413).send({ error: `配置过大（上限 ${INTAKE_CONFIG_LIMIT} 字节）。` });
-        }
-        setIntakeConfig(body.payload);
-        logEvent("info", "摄取", "摄取窗口配置已更新（模型与提示词模板）");
-        return { ok: true };
-    });
-
-    // --- 摄取入口（智能摄取窗口 / 任意本机客户端）-----------------------------
-    // The one fixed entry for structured drafts. An isolated intake process, a
+    // --- 摄取入口（任意本机客户端）-------------------------------------------
+    // The one fixed entry for structured drafts. An external organizer, a
     // script, or a hand-written payload all land here. No model, no prompt and
     // no key lives in this process: the row semantics are the publishing
     // tool's own, and a row arrives dirty in the push queue exactly like a CSV
@@ -550,11 +524,11 @@ function errorMessage(error: unknown): string {
         };
     };
 
-    // What an intake client needs to build a payload, without the 2 MB of every
-    // row's content: terms carry their usage count so a prompt can say "prefer
-    // what the site already uses", their parent path so 分类 can be shown as a
-    // tree, and the target site rides along so the client can show where the
-    // rows are about to land.
+    // What an ingest client needs to build a payload, without the 2 MB of every
+    // row's content: terms carry their usage count so a client can prefer what
+    // the site already uses, their parent path so 分类 can be shown as a tree,
+    // and the target site rides along so the client can show where the rows are
+    // about to land.
     app.get("/api/ingest/context", async () => {
         const settings = getSettings();
         const usage = listTermUsage();
@@ -573,9 +547,10 @@ function errorMessage(error: unknown): string {
         for (const slug of TAXONOMY_ORDER) {
             const list = grouped[slug];
             if (list) {
-                // Most-used first: that is the order the prompt and the
-                // checkbox list want, and the count is why it exists. The path
-                // is what tells two same-named children apart.
+                // Most-used first: that is the order a draft wants and the
+                // order the checkbox list shows, and the count is why it
+                // exists. The path is what tells two same-named children
+                // apart.
                 const sorted = [...list].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh"));
                 terms[slug] = sorted.map((term) => ({ ...term, path: termPath(term, sorted) }));
             }

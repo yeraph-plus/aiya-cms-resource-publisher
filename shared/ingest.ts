@@ -1,8 +1,8 @@
 /**
- * The ingest contract: one structured payload — an agent's or the intake
- * window's output — turned into dirty local rows. Everything here is pure, so
- * the server runs it authoritatively for /api/ingest and /api/ingest/preview
- * and the preview shows exactly the rows the write would create.
+ * The ingest contract: one structured payload — an external organizer's output
+ * — turned into dirty local rows. Everything here is pure, so the server runs
+ * it authoritatively for /api/ingest and /api/ingest/preview and the preview
+ * shows exactly the rows the write would create.
  *
  * Field semantics mirror the CSV importer (title non-empty after trim, the
  * three statuses, wall-clock dates, a term name that does not exist yet

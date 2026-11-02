@@ -359,14 +359,6 @@ export default function App() {
                     <button className="btn" disabled={busy} onClick={() => setImportOpen(true)}>
                         导入 CSV
                     </button>
-                    <button
-                        className="btn"
-                        disabled={busy}
-                        title="打开独立的智能摄取窗口（需先 npm run intake）：原始语料 → 结构化草稿 → 入队"
-                        onClick={() => window.open("http://127.0.0.1:5180", "_blank", "noopener")}
-                    >
-                        智能摄取
-                    </button>
                 </span>
                 <span className="pl-2 border-l border-neutral-200 flex items-center gap-2">
                     <button
