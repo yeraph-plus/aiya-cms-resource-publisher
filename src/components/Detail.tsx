@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { RowDTO, StateDTO } from "../types";
+import type { ContentMode, DetailTab, RowDTO, StateDTO } from "../types";
 import { TAXONOMY_LABELS, TAXONOMY_ORDER } from "../types";
-import { ensureStagingDir, fetchStagingDir, openStagingDir, saveRow, uploadImage, type RowPatch } from "../api";
+import { ensureStagingDir, fetchStagingDir, openStagingDir, saveRow, stageImage, type RowPatch } from "../api";
 import { groupTermsByRoot, mergeTermTokens, splitTermInput, termPath, type TermOption } from "../../shared/terms";
 import FileServeEditor from "./FileServeEditor";
+import HtmlEditor from "./HtmlEditor";
+import HtmlPreview from "./HtmlPreview";
 import { normalizeConfig, type FileServeConfig } from "../../shared/fileserve";
 import { prependImageTags, toBase64 } from "../../shared/image-upload";
 
@@ -11,6 +13,11 @@ interface Props {
     row: RowDTO;
     state: StateDTO;
     busy: boolean;
+    /** The open tab / view live in the App: switching rows keeps them. */
+    tab: DetailTab;
+    onTab: (tab: DetailTab) => void;
+    mode: ContentMode;
+    onMode: (mode: ContentMode) => void;
     /** Hands the row the server stored back to the App for a one-row update. */
     onEdit: (row: RowDTO) => void;
     /** localIds whose pending edit must be dropped rather than flushed — the
@@ -34,7 +41,12 @@ interface Draft {
     fileserve: FileServeConfig | null;
 }
 
-export default function Detail({ row, state, busy, onEdit, discardFlush, notify }: Props) {
+const TABS: { id: DetailTab; label: string }[] = [
+    { id: "body", label: "正文" },
+    { id: "props", label: "属性" },
+];
+
+export default function Detail({ row, state, busy, tab, onTab, mode, onMode, onEdit, discardFlush, notify }: Props) {
     const draftFromRow = (source: RowDTO): Draft => ({
         status: source.status,
         title: source.title,
@@ -155,49 +167,49 @@ export default function Detail({ row, state, busy, onEdit, discardFlush, notify 
     };
 
     // --- 正文插图 ---------------------------------------------------------
-    // The image goes to the site's pic bed through the local server; what
-    // lands in the content is the returned absolute URL — the same markup
-    // the site's own editor would insert, so the post never depends on
-    // this tool still running.
-    const [uploading, setUploading] = useState(false);
+    // Picking an image no longer touches the network: the bytes are copied
+    // into the app's own images directory and the source keeps the real
+    // absolute path. `runPush` uploads the file and rewrites the reference
+    // just before the row is written, so an unpublished row never occupies
+    // the pic bed and a failed push leaves no half-inserted body behind.
+    const [staging, setStaging] = useState(false);
     const [dragging, setDragging] = useState(false);
     const imageInput = useRef<HTMLInputElement | null>(null);
 
     /**
-     * The drop zone's one job: upload what was dropped/picked, then put the
+     * The drop zone's one job: stage what was dropped/picked, then put the
      * tags at the very start of the body. Order is preserved because the
      * site's cover pipeline takes the first image of the body — this is the
      * publishing contract, not a caret position. A failed file is reported and
-     * skipped; the ones that uploaded still land.
+     * skipped; the ones that staged still land.
      */
     const onImagesPicked = (files: FileList | null) => {
         const picked = Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
         if (picked.length === 0) {
-            notify("err", "没有可上传的图片（只接受图片文件）。");
+            notify("err", "没有可插入的图片（只接受图片文件）。");
             return;
         }
-        setUploading(true);
+        setStaging(true);
         void (async () => {
-            const urls: string[] = [];
+            const srcs: string[] = [];
             const failures: string[] = [];
             for (const file of picked) {
                 try {
-                    const encoded = toBase64(await file.arrayBuffer());
-                    const uploaded = await uploadImage(file.name, file.type, encoded);
-                    urls.push(uploaded.url);
+                    const staged = await stageImage(file.name, file.type, toBase64(await file.arrayBuffer()));
+                    srcs.push(staged.src);
                 } catch (error) {
                     failures.push(`${file.name}：${String(error)}`);
                 }
             }
-            if (urls.length > 0) {
-                update({ content: prependImageTags(draftRef.current.content, urls) });
+            if (srcs.length > 0) {
+                update({ content: prependImageTags(draftRef.current.content, srcs) });
             }
             if (failures.length > 0) {
-                notify("err", `图片上传失败：${failures.join("；")}`);
+                notify("err", `图片暂存失败：${failures.join("；")}`);
             } else {
-                notify("ok", `已插入 ${urls.length} 张图片（正文最前）`);
+                notify("ok", `已插入 ${srcs.length} 张图片（存本地，推送时上传）`);
             }
-            setUploading(false);
+            setStaging(false);
         })();
     };
 
@@ -248,17 +260,17 @@ export default function Detail({ row, state, busy, onEdit, discardFlush, notify 
     // Staging folder for files pending the client upload; purely local — the
     // netdisk lane names and creates its folder netdisk-side and never reads
     // this. Keyed by the site's post id; adding the first group triggers it.
-    const [staging, setStaging] = useState<{ dir: string | null; name: string | null } | null>(null);
+    const [localDir, setLocalDir] = useState<{ dir: string | null; name: string | null } | null>(null);
     useEffect(() => {
         if (row.postId === null) {
-            setStaging(null);
+            setLocalDir(null);
             return;
         }
         let alive = true;
         void fetchStagingDir(row.localId)
             .then((result) => {
                 if (alive) {
-                    setStaging(result);
+                    setLocalDir(result);
                 }
             })
             .catch(() => {});
@@ -274,7 +286,7 @@ export default function Detail({ row, state, busy, onEdit, discardFlush, notify 
         void ensureStagingDir(row.localId)
             .then((result) => {
                 if (result.dir !== null) {
-                    setStaging({ dir: result.dir, name: result.name });
+                    setLocalDir({ dir: result.dir, name: result.name });
                     if (result.status === "created" || result.status === "claimed") {
                         notify("ok", `本地目录已就绪：${result.name}`);
                     }
@@ -290,7 +302,7 @@ export default function Detail({ row, state, busy, onEdit, discardFlush, notify 
             try {
                 const result = await openStagingDir(row.localId);
                 if (result.dir !== null) {
-                    setStaging({ dir: result.dir, name: result.name });
+                    setLocalDir({ dir: result.dir, name: result.name });
                 }
             } catch (error) {
                 notify("err", String(error));
@@ -306,222 +318,273 @@ export default function Detail({ row, state, busy, onEdit, discardFlush, notify 
     ].filter(Boolean) as string[];
 
     return (
-        <div className="p-3 flex flex-col gap-3">
-            <div className="flex flex-wrap gap-1">
-                {badges.map((badge) => (
-                    <span key={badge} className="px-1.5 rounded text-[11px] bg-neutral-100 text-neutral-600">
-                        {badge}
-                    </span>
-                ))}
-            </div>
-
-            <label className="block">
-                <span className="lbl">标题</span>
-                <input className="w-full" value={draft.title} onChange={(event) => update({ title: event.target.value })} />
-            </label>
-
-            <div className="grid grid-cols-2 gap-2">
-                <label className="block">
-                    <span className="lbl">状态</span>
-                    <select className="w-full" value={draft.status} onChange={(event) => update({ status: event.target.value })}>
-                        <option value="publish">publish</option>
-                        <option value="draft">draft</option>
-                        <option value="future">future（站点按日期定时）</option>
-                    </select>
-                </label>
-                <label className="block">
-                    <span className="lbl">作者</span>
-                    <select
-                        className="w-full"
-                        value={draft.authorId ?? ""}
-                        onChange={(event) => update({ authorId: event.target.value === "" ? null : Number(event.target.value) })}
+        <div className="h-full flex flex-col min-h-0">
+            {/* Tab strip; the badges sit here rather than in a pane, so they
+                stay readable whichever tab is open. */}
+            <div className="flex items-end gap-1 px-3 pt-1.5 border-b border-neutral-200 shrink-0">
+                {TABS.map((entry) => (
+                    <button
+                        key={entry.id}
+                        className={`px-2.5 py-1 text-xs border-b-2 -mb-px ${
+                            tab === entry.id
+                                ? "border-blue-600 text-blue-700 font-medium"
+                                : "border-transparent text-neutral-500 hover:text-neutral-700"
+                        }`}
+                        onClick={() => onTab(entry.id)}
                     >
-                        <option value="">（站点当前账号）</option>
-                        {state.authors.map((author) => (
-                            <option key={author.id} value={author.id}>
-                                {author.name}（#{author.id}）
-                            </option>
-                        ))}
-                    </select>
+                        {entry.label}
+                        {entry.id === "body" && draft.content.trim() === "" ? <span className="ml-1 text-neutral-400">·空</span> : null}
+                    </button>
+                ))}
+                <span className="ml-auto flex flex-wrap gap-1 justify-end pb-1">
+                    {badges.map((badge) => (
+                        <span key={badge} className="px-1.5 rounded text-[11px] bg-neutral-100 text-neutral-600">
+                            {badge}
+                        </span>
+                    ))}
+                </span>
+            </div>
+
+            {/* ---- 正文 ------------------------------------------------------ */}
+            {/* Kept mounted while 属性 is open: the editor holds the undo stack
+                and the caret, and the preview holds its scroll position. */}
+            <div className={`flex-1 min-h-0 flex flex-col gap-2 p-3 ${tab === "body" ? "" : "hidden"}`}>
+                <label className="block shrink-0">
+                    <span className="lbl">标题</span>
+                    <input className="w-full" value={draft.title} onChange={(event) => update({ title: event.target.value })} />
                 </label>
-            </div>
 
-            <label className="block">
-                <span className="lbl">发布时间（站点时区；留空 = 推送时定为当前）</span>
-                <input
-                    type="datetime-local"
-                    className="w-full"
-                    value={draft.dateLocal}
-                    onChange={(event) => update({ dateLocal: event.target.value })}
-                />
-            </label>
-
-            {TAXONOMY_ORDER.map((taxonomy) => {
-                const options = termOptions(taxonomy);
-                const selected = draft.terms[taxonomy] ?? [];
-                if (taxonomy !== "resource_category" && options.length === 0 && selected.length === 0) {
-                    return null;
-                }
-                // 分类 is the one hierarchical taxonomy, so it is the one that
-                // reads badly as a flat list: one line per top-level category,
-                // its children on the same line behind a └, the next category
-                // on the next line. Everything else is flat and unchanged.
-                const hierarchical = options.some((option) => option.parent !== 0);
-                const renderOption = (option: TermOption, child = false) => {
-                    const ref = String(option.id);
-                    return (
-                        <label
-                            key={ref}
-                            className="inline-flex items-center gap-1 cursor-pointer"
-                            title={termPath(option, options)}
-                        >
-                            {child ? <span className="text-neutral-300">└</span> : null}
-                            <input
-                                type="checkbox"
-                                checked={selected.includes(ref)}
-                                onChange={(event) => {
-                                    if (event.target.checked) {
-                                        addRef(taxonomy, ref);
-                                    } else {
-                                        removeTerm(taxonomy, ref);
-                                    }
-                                }}
-                            />
-                            <span className={child ? "text-neutral-600" : "font-medium"}>{option.name}</span>
-                        </label>
-                    );
-                };
-                return (
-                    <div key={taxonomy}>
-                        <span className="lbl">{TAXONOMY_LABELS[taxonomy] ?? taxonomy}</span>
-                        <input
-                            className="w-full mb-1"
-                            placeholder="名称用「、」分隔可一次添加多个，回车确认"
-                            value={termInputs[taxonomy] ?? ""}
-                            onChange={(event) => setTermInputs((prev) => ({ ...prev, [taxonomy]: event.target.value }))}
-                            onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                    event.preventDefault();
-                                    commitTermInput(taxonomy);
-                                }
-                            }}
-                            onBlur={() => commitTermInput(taxonomy)}
-                        />
-                        {hierarchical ? (
-                            <div className="flex flex-col gap-y-1">
-                                {groupTermsByRoot(options).map((group) => (
-                                    <div key={group.root.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                                        {renderOption(group.root)}
-                                        {group.children.map((child) => renderOption(child, true))}
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="flex flex-wrap gap-x-3 gap-y-1">
-                                {options.map((option) => renderOption(option))}
-                            </div>
-                        )}
-                        {/* Selected refs missing from the term registry stay
-                            visible and removable: not-yet-created names. */}
-                        {selected
-                            .filter((ref) => ref.startsWith("name:") || !options.some((option) => String(option.id) === ref))
-                            .map((ref) => (
-                                <span key={ref} className="chip">
-                                    {refLabel(taxonomy, ref)}
-                                    <button
-                                        className="ml-1 text-neutral-400 hover:text-red-500"
-                                        onClick={() => removeTerm(taxonomy, ref)}
-                                    >
-                                        ×
-                                    </button>
-                                </span>
-                            ))}
+                <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex rounded border border-neutral-300 overflow-hidden text-xs shrink-0">
+                        {([
+                            { id: "edit", label: "编辑" },
+                            { id: "preview", label: "预览" },
+                        ] as const).map((entry) => (
+                            <button
+                                key={entry.id}
+                                className={`px-2.5 py-1 ${
+                                    mode === entry.id ? "bg-blue-600 text-white" : "bg-white text-neutral-600 hover:bg-neutral-50"
+                                }`}
+                                onClick={() => onMode(entry.id)}
+                            >
+                                {entry.label}
+                            </button>
+                        ))}
                     </div>
-                );
-            })}
-
-            <div className="block">
-                <span className="lbl">正文（源码，渲染归站点）</span>
-                <div
-                    className={`mb-2 rounded border border-dashed px-3 py-2 text-xs cursor-pointer ${
-                        dragging
-                            ? "border-blue-400 bg-blue-50 text-blue-700"
-                            : "border-neutral-300 text-neutral-500 hover:border-neutral-400"
-                    }`}
-                    onClick={() => imageInput.current?.click()}
-                    onDragOver={(event) => {
-                        event.preventDefault();
-                        setDragging(true);
-                    }}
-                    onDragLeave={() => setDragging(false)}
-                    onDrop={(event) => {
-                        event.preventDefault();
-                        setDragging(false);
-                        onImagesPicked(event.dataTransfer.files);
-                    }}
-                >
-                    {uploading ? "上传中…" : "拖放图片到这里（可多张，也可点击选择）—— 一律插到正文最前"}
+                    <div
+                        className={`flex-1 min-w-0 rounded border border-dashed px-2 py-1 text-xs cursor-pointer truncate ${
+                            dragging
+                                ? "border-blue-400 bg-blue-50 text-blue-700"
+                                : "border-neutral-300 text-neutral-500 hover:border-neutral-400"
+                        }`}
+                        title="拖放或点击选择图片；插入正文最前，先存本地，推送时上传"
+                        onClick={() => imageInput.current?.click()}
+                        onDragOver={(event) => {
+                            event.preventDefault();
+                            setDragging(true);
+                        }}
+                        onDragLeave={() => setDragging(false)}
+                        onDrop={(event) => {
+                            event.preventDefault();
+                            setDragging(false);
+                            onImagesPicked(event.dataTransfer.files);
+                        }}
+                    >
+                        {staging ? "暂存中…" : "+ 图片（插到正文最前）"}
+                    </div>
+                    <input
+                        ref={imageInput}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(event) => {
+                            const files = event.currentTarget.files;
+                            event.currentTarget.value = "";
+                            onImagesPicked(files);
+                        }}
+                    />
                 </div>
-                <input
-                    ref={imageInput}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(event) => {
-                        const files = event.currentTarget.files;
-                        event.currentTarget.value = "";
-                        onImagesPicked(files);
-                    }}
-                />
-                <textarea
-                    className="w-full font-mono text-xs leading-5"
-                    rows={8}
-                    value={draft.content}
-                    onChange={(event) => update({ content: event.target.value })}
-                />
-            </div>
 
-            <div>
-                <span className="lbl">本地目录（可选的本地暂存）</span>
-                {row.postId === null ? (
-                    <p className="text-xs text-neutral-400">这一行还没推送到站点；先推送发布，再建本地目录。</p>
-                ) : (
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                        {staging?.name ? (
-                            <>
-                                <span className="font-mono">{staging.name}</span>
-                                <button className="btn" disabled={busy} onClick={onOpenDir}>
-                                    打开目录
-                                </button>
-                            </>
-                        ) : (
-                            <>
-                                <span className="text-neutral-400">尚未创建</span>
-                                <button className="btn" disabled={busy} onClick={onOpenDir}>
-                                    创建目录
-                                </button>
-                            </>
-                        )}
-                        <span className="text-neutral-400">纯本地暂存辅助，网盘回填不依赖它；目录会在下方添加数据组时自动创建。</span>
+                <div className="flex-1 min-h-0">
+                    <div className={`h-full border border-neutral-200 rounded overflow-hidden ${mode === "edit" ? "" : "hidden"}`}>
+                        <HtmlEditor value={draft.content} onChange={(content) => update({ content })} visible={mode === "edit"} />
                     </div>
-                )}
+                    <div className={`h-full ${mode === "preview" ? "" : "hidden"}`}>
+                        <HtmlPreview content={draft.content} siteUrl={state.settings.siteUrl} />
+                    </div>
+                </div>
+
+                <p className="text-[11px] text-neutral-400 shrink-0">
+                    源码即站点收到的内容；<code>file://</code> 图片先存本地，推送这一行时上传并换成站点地址。
+                </p>
             </div>
 
-            <div>
-                <span className="lbl">文件列表（aiya_core_fileserve）</span>
-                <FileServeEditor
-                    config={draft.fileserve}
-                    onChange={(config) => update({ fileserve: config })}
-                    onGroupAdded={triggerStaging}
-                />
-            </div>
+            {/* ---- 属性 ------------------------------------------------------ */}
+            <div className={`flex-1 min-h-0 overflow-y-auto p-3 ${tab === "props" ? "" : "hidden"}`}>
+                <div className="flex flex-col gap-3">
+                    <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                            <span className="lbl">状态</span>
+                            <select className="w-full" value={draft.status} onChange={(event) => update({ status: event.target.value })}>
+                                <option value="publish">publish</option>
+                                <option value="draft">draft</option>
+                                <option value="future">future（站点按日期定时）</option>
+                            </select>
+                        </label>
+                        <label className="block">
+                            <span className="lbl">作者</span>
+                            <select
+                                className="w-full"
+                                value={draft.authorId ?? ""}
+                                onChange={(event) => update({ authorId: event.target.value === "" ? null : Number(event.target.value) })}
+                            >
+                                <option value="">（站点当前账号）</option>
+                                {state.authors.map((author) => (
+                                    <option key={author.id} value={author.id}>
+                                        {author.name}（#{author.id}）
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
 
-            <div className="text-xs text-neutral-400 space-y-0.5">
-                {row.lastError && <div className="text-red-500">上次错误：{row.lastError}</div>}
-                <div>上次同步：{row.lastSyncedGmt ?? "—"}</div>
-                <div>上次推送：{row.lastPushedGmt ?? "—"}</div>
-                <div>线上修改：{row.modifiedGmt || "—"}</div>
+                    <label className="block">
+                        <span className="lbl">发布时间（站点时区；留空 = 推送时定为当前）</span>
+                        <input
+                            type="datetime-local"
+                            className="w-full"
+                            value={draft.dateLocal}
+                            onChange={(event) => update({ dateLocal: event.target.value })}
+                        />
+                    </label>
+
+                    {TAXONOMY_ORDER.map((taxonomy) => {
+                        const options = termOptions(taxonomy);
+                        const selected = draft.terms[taxonomy] ?? [];
+                        if (taxonomy !== "resource_category" && options.length === 0 && selected.length === 0) {
+                            return null;
+                        }
+                        // 分类 is the one hierarchical taxonomy, so it is the one
+                        // that reads badly as a flat list: one line per top-level
+                        // category, its children on the same line behind a └, the
+                        // next category on the next line. Everything else is flat.
+                        const hierarchical = options.some((option) => option.parent !== 0);
+                        const renderOption = (option: TermOption, child = false) => {
+                            const ref = String(option.id);
+                            return (
+                                <label
+                                    key={ref}
+                                    className="inline-flex items-center gap-1 cursor-pointer"
+                                    title={termPath(option, options)}
+                                >
+                                    {child ? <span className="text-neutral-300">└</span> : null}
+                                    <input
+                                        type="checkbox"
+                                        checked={selected.includes(ref)}
+                                        onChange={(event) => {
+                                            if (event.target.checked) {
+                                                addRef(taxonomy, ref);
+                                            } else {
+                                                removeTerm(taxonomy, ref);
+                                            }
+                                        }}
+                                    />
+                                    <span className={child ? "text-neutral-600" : "font-medium"}>{option.name}</span>
+                                </label>
+                            );
+                        };
+                        return (
+                            <div key={taxonomy}>
+                                <span className="lbl">{TAXONOMY_LABELS[taxonomy] ?? taxonomy}</span>
+                                <input
+                                    className="w-full mb-1"
+                                    placeholder="名称用「、」分隔可一次添加多个，回车确认"
+                                    value={termInputs[taxonomy] ?? ""}
+                                    onChange={(event) => setTermInputs((prev) => ({ ...prev, [taxonomy]: event.target.value }))}
+                                    onKeyDown={(event) => {
+                                        if (event.key === "Enter") {
+                                            event.preventDefault();
+                                            commitTermInput(taxonomy);
+                                        }
+                                    }}
+                                    onBlur={() => commitTermInput(taxonomy)}
+                                />
+                                {hierarchical ? (
+                                    <div className="flex flex-col gap-y-1">
+                                        {groupTermsByRoot(options).map((group) => (
+                                            <div key={group.root.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                                {renderOption(group.root)}
+                                                {group.children.map((child) => renderOption(child, true))}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                                        {options.map((option) => renderOption(option))}
+                                    </div>
+                                )}
+                                {/* Selected refs missing from the term registry stay
+                                    visible and removable: not-yet-created names. */}
+                                {selected
+                                    .filter((ref) => ref.startsWith("name:") || !options.some((option) => String(option.id) === ref))
+                                    .map((ref) => (
+                                        <span key={ref} className="chip">
+                                            {refLabel(taxonomy, ref)}
+                                            <button
+                                                className="ml-1 text-neutral-400 hover:text-red-500"
+                                                onClick={() => removeTerm(taxonomy, ref)}
+                                            >
+                                                ×
+                                            </button>
+                                        </span>
+                                    ))}
+                            </div>
+                        );
+                    })}
+
+                    <div>
+                        <span className="lbl">本地目录（可选的本地暂存）</span>
+                        {row.postId === null ? (
+                            <p className="text-xs text-neutral-400">这一行还没推送到站点；先推送发布，再建本地目录。</p>
+                        ) : (
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                                {localDir?.name ? (
+                                    <>
+                                        <span className="font-mono">{localDir.name}</span>
+                                        <button className="btn" disabled={busy} onClick={onOpenDir}>
+                                            打开目录
+                                        </button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <span className="text-neutral-400">尚未创建</span>
+                                        <button className="btn" disabled={busy} onClick={onOpenDir}>
+                                            创建目录
+                                        </button>
+                                    </>
+                                )}
+                                <span className="text-neutral-400">纯本地暂存辅助，网盘回填不依赖它；目录会在下方添加数据组时自动创建。</span>
+                            </div>
+                        )}
+                    </div>
+
+                    <div>
+                        <span className="lbl">文件列表（aiya_core_fileserve）</span>
+                        <FileServeEditor
+                            config={draft.fileserve}
+                            onChange={(config) => update({ fileserve: config })}
+                            onGroupAdded={triggerStaging}
+                        />
+                    </div>
+
+                    <div className="text-xs text-neutral-400 space-y-0.5">
+                        {row.lastError && <div className="text-red-500">上次错误：{row.lastError}</div>}
+                        <div>上次同步：{row.lastSyncedGmt ?? "—"}</div>
+                        <div>上次推送：{row.lastPushedGmt ?? "—"}</div>
+                        <div>线上修改：{row.modifiedGmt || "—"}</div>
+                    </div>
+                </div>
             </div>
         </div>
     );

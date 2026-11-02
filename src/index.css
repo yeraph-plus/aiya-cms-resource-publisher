@@ -37,3 +37,13 @@ textarea:focus {
 .chip {
     @apply inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 text-xs;
 }
+
+/* 正文编辑器：CodeMirror 自己管滚动，外层只负责给满高度；隐藏时高度归零，
+   切回来由 requestMeasure 重新量。 */
+.cm-editor {
+    height: 100%;
+}
+
+.cm-scroller {
+    overflow: auto;
+}

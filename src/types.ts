@@ -1,5 +1,13 @@
 /** Shared client-side DTOs mirroring the local server's /api/state shape. */
 
+/** Which detail-panel tab is open. Lifted to the App so a row switch does not
+ * bounce the panel back to the default. */
+export type DetailTab = "body" | "props";
+
+/** 正文 tab's two views: the source editor and the rendered preview. Both stay
+ * mounted; this only decides which one is visible. */
+export type ContentMode = "edit" | "preview";
+
 export interface SettingsDTO {
     siteUrl: string;
     username: string;

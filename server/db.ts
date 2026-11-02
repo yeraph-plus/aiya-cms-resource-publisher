@@ -2,7 +2,8 @@ import Database from "better-sqlite3";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 
-const dataDir = process.env.PUBLISHER_DATA ?? process.cwd();
+/** Everything this tool owns lives here: the database and the staged images. */
+export const dataDir = process.env.PUBLISHER_DATA ?? process.cwd();
 mkdirSync(dataDir, { recursive: true });
 
 export const dbPath = join(dataDir, "publisher.db");

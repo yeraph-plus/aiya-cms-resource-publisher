@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api";
-import type { RowDTO, StateDTO } from "./types";
+import type { ContentMode, DetailTab, RowDTO, StateDTO } from "./types";
 import Grid from "./components/Grid";
 import Detail from "./components/Detail";
 import SettingsPanel from "./components/SettingsPanel";
@@ -44,6 +44,24 @@ export default function App() {
     const [dragging, setDragging] = useState(false);
     const widthRef = useRef(detailWidth);
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Which detail tab / view is open. Owned here rather than inside Detail
+    // because Detail is keyed by row: a row switch remounts it, and the panel
+    // bouncing back to 正文 on every click would make the tab useless.
+    const [detailTab, setDetailTab] = useState<DetailTab>(() =>
+        window.localStorage.getItem("publisher.detailTab") === "props" ? "props" : "body",
+    );
+    const [contentMode, setContentMode] = useState<ContentMode>(() =>
+        window.localStorage.getItem("publisher.contentMode") === "preview" ? "preview" : "edit",
+    );
+    const changeDetailTab = (next: DetailTab) => {
+        setDetailTab(next);
+        window.localStorage.setItem("publisher.detailTab", next);
+    };
+    const changeContentMode = (next: ContentMode) => {
+        setContentMode(next);
+        window.localStorage.setItem("publisher.contentMode", next);
+    };
 
     const startDrag = (event: React.PointerEvent) => {
         event.preventDefault();
@@ -452,12 +470,16 @@ export default function App() {
                     className="shrink-0 bg-white flex flex-col min-h-0 border-l border-neutral-200"
                 >
                     {selected ? (
-                        <div className="flex-1 overflow-y-auto min-h-0">
+                        <div className="flex-1 min-h-0">
                             <Detail
                                 key={`${selected.localId}:${revision}`}
                                 row={selected}
                                 state={state}
                                 busy={busy}
+                                tab={detailTab}
+                                onTab={changeDetailTab}
+                                mode={contentMode}
+                                onMode={changeContentMode}
                                 onEdit={applyRow}
                                 discardFlush={discardFlush}
                                 notify={notify}

@@ -234,7 +234,25 @@ export interface UploadImageResultDTO {
  * One image into the site's pic bed. base64 over JSON, not multipart:
  * the server owns the multipart leg to the site, so the tool keeps a
  * single request shape (and no new multipart dependency).
+ *
+ * The panel no longer calls this while editing — images are staged locally
+ * and uploaded by the push run — but the endpoint stays as the "upload now"
+ * door for a script or a manual call.
  */
 export function uploadImage(filename: string, mime: string, dataBase64: string): Promise<UploadImageResultDTO> {
     return call<UploadImageResultDTO>("/api/uploads/image", "POST", { filename, mime, dataBase64 });
+}
+
+export interface StagedImageDTO {
+    /** Real absolute path on this machine, as stored in the source. */
+    path: string;
+    /** The `file://` reference inserted into the post source. */
+    src: string;
+    /** Original filename, for the toast. */
+    name: string;
+}
+
+/** Copy one picked image into the local images directory — no network. */
+export function stageImage(filename: string, mime: string, dataBase64: string): Promise<StagedImageDTO> {
+    return call<StagedImageDTO>("/api/images", "POST", { filename, mime, dataBase64 });
 }

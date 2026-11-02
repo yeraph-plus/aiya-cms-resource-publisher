@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import {
     clearLogs,
     dbPath,
@@ -29,6 +29,7 @@ import { runPush } from "./push.js";
 import { fileServeState } from "./fileserveState.js";
 import { appliedSince, applyResult, buildQueue } from "./netdisklane.js";
 import { ensureStagingDir, findStagingDir, openStagingDir } from "./dirs.js";
+import { readableImage, stageImage, StageError } from "./images.js";
 import { isOurStateEndpoint, killTree, listenerPid } from "./portguard.js";
 import { getProgress, setProgress } from "./progress.js";
 import { normalizeSiteUrl, ping, uploadImage, WpError } from "./wp.js";
@@ -672,23 +673,65 @@ function errorMessage(error: unknown): string {
     const UPLOAD_MAX_MB = 10;
     const UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024;
 
-    app.post("/api/uploads/image", async (request, reply) => {
-        const body = (request.body ?? {}) as { filename?: unknown; mime?: unknown; dataBase64?: unknown };
+    /** Both image routes take the same JSON body; the checks live in one place. */
+    const decodeImageBody = (
+        raw: unknown,
+    ): { ok: true; filename: string; mime: string; bytes: Buffer } | { ok: false; status: number; error: string } => {
+        const body = (raw ?? {}) as { filename?: unknown; mime?: unknown; dataBase64?: unknown };
         const filename = typeof body.filename === "string" ? body.filename.trim() : "";
         const encoded = typeof body.dataBase64 === "string" ? body.dataBase64 : "";
         if (filename === "" || encoded === "") {
-            return reply.code(400).send({ error: "没有收到图片数据。" });
+            return { ok: false, status: 400, error: "没有收到图片数据。" };
         }
         // Reject before decoding: Buffer.from() would happily eat garbage.
         if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
-            return reply.code(400).send({ error: "图片数据不是合法的 base64。" });
+            return { ok: false, status: 400, error: "图片数据不是合法的 base64。" };
         }
         const bytes = Buffer.from(encoded, "base64");
         if (bytes.length === 0) {
-            return reply.code(400).send({ error: "图片数据为空。" });
+            return { ok: false, status: 400, error: "图片数据为空。" };
         }
         if (bytes.length > UPLOAD_MAX_BYTES) {
-            return reply.code(413).send({ error: `图片超过 ${UPLOAD_MAX_MB}MB 上限（站点图床的限制）。` });
+            return { ok: false, status: 413, error: `图片超过 ${UPLOAD_MAX_MB}MB 上限（站点图床的限制）。` };
+        }
+        return { ok: true, filename, mime: typeof body.mime === "string" ? body.mime : "", bytes };
+    };
+
+    // --- 本地暂存（编辑期不联网）-------------------------------------------
+    // A picked image is written into <data>/images and the source keeps its
+    // real absolute path. The site never sees this: the push run uploads the
+    // file and rewrites the reference just before the row is written.
+    app.post("/api/images", async (request, reply) => {
+        const parsed = decodeImageBody(request.body);
+        if (!parsed.ok) {
+            return reply.code(parsed.status).send({ error: parsed.error });
+        }
+        try {
+            const staged = stageImage(parsed.filename, parsed.mime, parsed.bytes);
+            logEvent("info", "图片", `${parsed.filename} 已暂存到本地：${staged.path}`);
+            return staged;
+        } catch (error) {
+            return reply.code(error instanceof StageError ? 400 : 500).send({ error: errorMessage(error) });
+        }
+    });
+
+    // The preview's image loader. Scoped to the images directory, so this is
+    // not a general local-file reader: a traversed or foreign path is a 404.
+    app.get("/api/images/file", async (request, reply) => {
+        const query = (request.query ?? {}) as { path?: unknown };
+        const file = readableImage(typeof query.path === "string" ? query.path : "");
+        if (file === null) {
+            return reply.code(404).send({ error: "本地图片不存在。" });
+        }
+        reply.header("Cache-Control", "no-cache");
+        reply.type(file.mime);
+        return reply.send(createReadStream(file.path));
+    });
+
+    app.post("/api/uploads/image", async (request, reply) => {
+        const parsed = decodeImageBody(request.body);
+        if (!parsed.ok) {
+            return reply.code(parsed.status).send({ error: parsed.error });
         }
         const settings = getSettings();
         if (!settings.siteUrl || !settings.username || !settings.appPassword) {
@@ -702,14 +745,14 @@ function errorMessage(error: unknown): string {
                     appPassword: settings.appPassword,
                     proxyUrl: settings.proxyUrl,
                 },
-                filename,
-                typeof body.mime === "string" ? body.mime : "",
-                bytes,
+                parsed.filename,
+                parsed.mime,
+                parsed.bytes,
             );
-            logEvent("info", "上传", `${filename} → ${uploaded.path}`);
+            logEvent("info", "上传", `${parsed.filename} → ${uploaded.path}`);
             return uploaded;
         } catch (error) {
-            logEvent("error", "上传", `${filename}：${errorMessage(error)}`);
+            logEvent("error", "上传", `${parsed.filename}：${errorMessage(error)}`);
             return reply.code(400).send({ error: errorMessage(error) });
         }
     });

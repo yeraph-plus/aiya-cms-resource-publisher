@@ -19,7 +19,10 @@ import {
 } from "./wp.js";
 import { buildPayload } from "./payload.js";
 import { mergeRemoteFileserve, normalizeConfig, productionConfig } from "../shared/fileserve.js";
+import { replaceImageSources } from "../shared/image-upload.js";
+import { uploadLocalImages } from "./images.js";
 import { setProgress } from "./progress.js";
+import type { WpCreds } from "./wp.js";
 
 /** Consecutive transport-level failures (status 0) before the run aborts. */
 const TRANSPORT_ABORT_LIMIT = 3;
@@ -144,6 +147,27 @@ function applyResponse(row: PostRow, item: WpItem, pushedRefs: Record<string, st
 }
 
 /**
+ * The uploaded files already have site URLs, so the stored source points at
+ * them from now on: a retry must not upload the same bytes twice, and the
+ * panel should show the online image instead of a local one. Only the
+ * references are rewritten — an edit made during the push keeps every other
+ * byte, and the cover pipeline never sees a `file://` src.
+ */
+function applyUploadedSources(localId: number, uploaded: Map<string, string>): void {
+    if (uploaded.size === 0) {
+        return;
+    }
+    const current = getPost(localId);
+    if (!current) {
+        return;
+    }
+    const next = replaceImageSources(current.content, uploaded);
+    if (next !== current.content) {
+        updatePostRow(localId, { content: next });
+    }
+}
+
+/**
  * Push every dirty row (or the given subset): create rows without a post id,
  * update the rest. The whole per-row write — payload build, site call,
  * response application — sits in one try, so a poison row costs itself and
@@ -160,6 +184,12 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
         outcome.error = "先在设置里填好站点地址、用户名和应用密码。";
         return outcome;
     }
+    const creds: WpCreds = {
+        siteUrl: settings.siteUrl,
+        username: settings.username,
+        appPassword: settings.appPassword,
+        proxyUrl: settings.proxyUrl,
+    };
 
     const rows = listDirtyPosts(localIds);
     if (rows.length === 0) {
@@ -187,21 +217,24 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
         if (row.fileserve !== null) {
             fileserveValue = JSON.stringify(productionConfig(config));
         }
+        // Staged images go up here, immediately before the row is written:
+        // the source is rewritten to the returned URLs, and a file that will
+        // not upload fails the row instead of pushing a `file://` src the
+        // site's cover pipeline would try to resolve.
+        let uploaded = new Map<string, string>();
         try {
             // Read once and hand the same references to the write-back: they
             // are what "the pushed revision" means for the race check above.
             const termRefs = getTermRefs(row.localId);
-            const payload = buildPayload({ ...row, fileserve: fileserveValue }, termRefs);
+            const images = await uploadLocalImages(creds, row.content);
+            uploaded = images.uploaded;
+            if (images.failures.length > 0) {
+                throw new Error(`图片上传失败：${images.failures.join("；")}`);
+            }
+            const payload = buildPayload({ ...row, content: images.content, fileserve: fileserveValue }, termRefs);
             const item = row.postId
-                ? await updateResource(
-                      { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword, proxyUrl: settings.proxyUrl },
-                      row.postId,
-                      payload,
-                  )
-                : await createResource(
-                      { siteUrl: settings.siteUrl, username: settings.username, appPassword: settings.appPassword, proxyUrl: settings.proxyUrl },
-                      payload,
-                  );
+                ? await updateResource(creds, row.postId, payload)
+                : await createResource(creds, payload);
             applyResponse(row, item, termRefs);
             outcome.pushed += 1;
             transportFailures = 0;
@@ -219,12 +252,17 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
                     outcome.error =
                         `站点连续 ${transportFailures} 次不可达，已中止本轮推送` +
                         (remaining > 0 ? `：剩余 ${remaining} 行保持待推送。` : "。");
+                    applyUploadedSources(row.localId, uploaded);
                     break;
                 }
             } else {
                 transportFailures = 0;
             }
         }
+        // A file that did reach the pic bed stays uploaded even when the row
+        // write failed: rewriting the reference here is what stops the next
+        // attempt from filing a duplicate copy.
+        applyUploadedSources(row.localId, uploaded);
     }
 
     outcome.ok = outcome.failed === 0;
