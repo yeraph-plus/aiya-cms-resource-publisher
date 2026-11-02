@@ -1,6 +1,6 @@
-# 五个命令
+# 六个命令（一个前置 + 五个操作）
 
-所有命令在仓库根目录执行，端点地址由脚本解析（`PUBLISHER_BASE` 环境变量优先，否则探 `127.0.0.1:5175` 并用 `/api/ingest/context` 的返回形状确认「确实是发帖器」）。脚本会拒绝任何不认识的目标——它不是通用 HTTP 客户端。
+所有命令在仓库根目录执行，端点地址由脚本解析（`PUBLISHER_BASE` 环境变量优先，否则探 `127.0.0.1:5175` 并用 `/api/health` 的 `app` 字段确认「确实是发帖器」）。脚本会拒绝任何不认识的目标——它不是通用 HTTP 客户端。
 
 ```bash
 node skills/aiya-post-writer/scripts/publisher.mjs <命令> [参数]
@@ -8,6 +8,7 @@ node skills/aiya-post-writer/scripts/publisher.mjs <命令> [参数]
 
 | 命令 | 底层端点 | 作用 | 写库 |
 |---|---|---|---|
+| `health` | `GET /api/health` | 探活、身份、配置状态 | 否 |
 | `context` | `GET /api/ingest/context` | 词法 / 作者 / 默认值 / 上限 | 否 |
 | `lookup` | `GET /api/state` | 本地查重（脚本只投影标题相关字段） | 否 |
 | `stage` | `POST /api/images` | 图片复制进本地 images 目录 | 只写图片文件 |
@@ -17,6 +18,32 @@ node skills/aiya-post-writer/scripts/publisher.mjs <命令> [参数]
 退出码：`0` 成功；`1` 调用失败（连不上、HTTP 错误、参数不对）；`2` 调用成功但有行被拒——**看返回里的 `errors`**。
 
 ---
+
+## health
+
+```bash
+node … health --pretty
+```
+
+```json
+{
+  "base": "http://127.0.0.1:5175",
+  "app": "aiya-publisher",
+  "version": "0.1.0",
+  "port": 5175,
+  "pid": 19312,
+  "startedAt": "2026-11-03T03:12:41.008Z",
+  "uptimeSec": 2741,
+  "dataDir": "C:\\Users\\me\\AppData\\Roaming\\aiya-publisher\\data",
+  "configured": true,
+  "defaultStatus": "draft",
+  "ingestMaxRows": 500
+}
+```
+
+每次写操作之前跑。判断只看三件事：命令有没有退出 1、`app` 是不是 `aiya-publisher`、`configured` 是否 `true`。`dataDir` 是暂存图片的落点（`<dataDir>/images`），排查「图存哪了」时用它；`version` 是排障的第一手信息。
+
+`configured: false` 不阻止起草，但推送时图片传不进图床——回报里要说明。`base` 只是这次的解析结果，不要写进 payload 或后续指令，下次端口可能不同。
 
 ## context
 
@@ -141,6 +168,7 @@ node … ingest draft.json --source "agent/2026-11-batch"
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 「连不上发帖器」 | 桌面版没开 / 端口被改 | 让用户启动，或设 `PUBLISHER_BASE` |
+| health 通了但 `app` 不对 | 那个端口被别的程序占着 | 报给用户，不要重试 |
 | `errors` 里「分类里没有 id N 的术语」 | id 抄错或站点已删该词 | 回 `context` 重取 |
 | `errors` 里「未知词法：xxx」 | 词法 key 拼错 | 只有那六个 key |
 | `errors` 里「定时（future）行必须携带发布时间」 | `status: future` 没给 `dateLocal` | 补时间，或改成默认状态 |

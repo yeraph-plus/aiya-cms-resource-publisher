@@ -59,6 +59,24 @@ describe("local-only request guard", () => {
         expect(res.json().error).toContain("本机");
     });
 
+    it("guards /api/health like every other route", async () => {
+        // A probe that answered cross-site would tell any page on the machine
+        // where the data lives and whether credentials are set.
+        const crossSite = await app.inject({
+            method: "GET",
+            url: "/api/health",
+            headers: { origin: "https://evil.test" },
+        });
+        expect(crossSite.statusCode).toBe(403);
+
+        const rebinding = await app.inject({
+            method: "GET",
+            url: "/api/health",
+            headers: { host: "evil.test" },
+        });
+        expect(rebinding.statusCode).toBe(403);
+    });
+
     it("lets the tool's own pages through", async () => {
         // The Vite dev server proxies /api without rewriting Host, so the API
         // sees localhost:5173 from the browser on 127.0.0.1:5173.

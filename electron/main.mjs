@@ -15,6 +15,9 @@ import path from "node:path";
 // install dir and inside the per-user application data folder.
 const dataDir = path.join(app.getPath("userData"), "data");
 process.env.PUBLISHER_DATA = dataDir;
+// Same timing, same reason: /api/health reports this, and a skill that pins
+// its behaviour to a version needs the shell's answer, not package.json's.
+process.env.PUBLISHER_VERSION = app.getVersion();
 
 const { PUBLISHER_PORT, listenWithPortguard } = await import("../dist-server/index.js");
 

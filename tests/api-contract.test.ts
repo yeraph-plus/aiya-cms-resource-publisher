@@ -38,6 +38,29 @@ describe("local api contract", () => {
         expect(state.json().settings.proxyUrl).toBe("http://127.0.0.1:7890");
     });
 
+    it("answers /api/health with identity, data dir and whether the site is configured", async () => {
+        // The one call an outside agent makes before anything else: it has to
+        // say "this is the publisher" without dumping rows or vocabulary.
+        await app.inject({
+            method: "PUT",
+            url: "/api/settings",
+            payload: { siteUrl: "http://localhost:8000", username: "u", appPassword: "p" },
+        });
+        const res = await app.inject({ method: "GET", url: "/api/health" });
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.app).toBe("aiya-publisher");
+        expect(typeof body.version).toBe("string");
+        expect(body.port).toBeGreaterThan(0);
+        expect(typeof body.dataDir).toBe("string");
+        expect(body.configured).toBe(true);
+        expect(body.ingestMaxRows).toBe(500);
+        // No rows, no vocabulary, no key: the point of a separate probe.
+        expect(body.posts).toBeUndefined();
+        expect(body.terms).toBeUndefined();
+        expect(body.appPassword).toBeUndefined();
+    });
+
     it("connect layers the typed payload over the stored settings without saving", async () => {
         // Stored: user "u"; the form overrides it — the probe uses the typed
         // value and the stored proxy, and persists nothing.

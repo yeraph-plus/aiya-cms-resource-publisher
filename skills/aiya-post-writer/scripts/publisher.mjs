@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 /**
- * The five named calls a drafting agent is allowed to make. Each one maps to
- * exactly one local endpoint, and the endpoint base is resolved here rather
- * than written into a prompt: the publisher listens on a port that the user
- * may move (PUBLISHER_PORT), and a skill that pastes a URL into a body is a
- * skill that breaks the day that happens.
+ * The five named calls a drafting agent is allowed to make, plus the health
+ * probe that has to answer before any of them. Each one maps to exactly one
+ * local endpoint, and the endpoint base is resolved here rather than written
+ * into a prompt: the publisher listens on a port the user may move
+ * (PUBLISHER_PORT), and a skill that pastes a URL into a body is a skill that
+ * breaks the day that happens.
  *
  * Deliberately not a general HTTP client. There is no `--method`, no `--path`,
  * no "call this endpoint" escape hatch: reading a row, pushing a row,
  * deleting a row and touching the settings all sit behind the same local
- * server, and the point of naming five verbs is that the other doors are not
+ * server, and the point of naming the verbs is that the other doors are not
  * reachable from a prompt.
  *
+ *   health   → GET  /api/health           who this is, version, data dir, configured?
  *   context  → GET  /api/ingest/context   vocabulary, authors, defaults, caps
  *   lookup   → GET  /api/state            duplicate check against local rows
  *   stage    → POST /api/images           copy an image into <data>/images
@@ -27,7 +29,7 @@ import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 
 /** Tried in order when PUBLISHER_BASE is unset. The first answering the
- * ingest-context fingerprint wins; anything else is not this tool. */
+ * /api/health fingerprint wins; anything else is not this tool. */
 const CANDIDATE_PORTS = [5175];
 
 /** Mirrors server/images.ts: the site's pic bed refuses more than this. */
@@ -44,6 +46,10 @@ const MIME_BY_EXT = {
 };
 
 const USAGE = `用法：node skills/aiya-post-writer/scripts/publisher.mjs <命令> [参数]
+
+  health
+      前置探活：确认这个端口上是发帖器、版本多少、数据目录在哪、站点是否已配置。
+      任何写操作之前先跑它；连不上就别往下走。
 
   context [--lines] [--taxonomy <slug>] [--limit <n>]
       做草稿要用的参照：六词法（带 id / 路径 / 使用次数）、作者、默认状态、行数上限。
@@ -97,17 +103,19 @@ function normalizeBase(value) {
     return /^https?:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`;
 }
 
-/** The context body doubles as the fingerprint, so the probe costs nothing. */
-async function fetchContext(base) {
-    const response = await fetch(`${base}/api/ingest/context`, { signal: AbortSignal.timeout(4000) });
-    if (!response.ok) {
+/** The health body doubles as the fingerprint: one small object, and the same
+ * call the skill's preflight runs. */
+async function probeHealth(base) {
+    try {
+        const response = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(4000) });
+        if (!response.ok) {
+            return null;
+        }
+        const body = await response.json();
+        return body !== null && typeof body === "object" && body.app === "aiya-publisher" ? body : null;
+    } catch {
         return null;
     }
-    const body = await response.json();
-    if (body === null || typeof body !== "object" || !("ingestMaxRows" in body) || !("terms" in body)) {
-        return null;
-    }
-    return body;
 }
 
 /**
@@ -119,17 +127,17 @@ async function resolveBase() {
     const explicit = process.env.PUBLISHER_BASE;
     if (typeof explicit === "string" && explicit.trim() !== "") {
         const base = normalizeBase(explicit);
-        const context = await fetchContext(base).catch(() => null);
-        if (context === null) {
+        const health = await probeHealth(base);
+        if (health === null) {
             fail(`连不上发帖器：PUBLISHER_BASE=${base} 没有回应，或那不是发帖器。先启动桌面版，或 npm run dev。`);
         }
-        return { base, context };
+        return { base, health };
     }
     for (const port of CANDIDATE_PORTS) {
         const base = `http://127.0.0.1:${port}`;
-        const context = await fetchContext(base).catch(() => null);
-        if (context !== null) {
-            return { base, context };
+        const health = await probeHealth(base);
+        if (health !== null) {
+            return { base, health };
         }
     }
     fail(
@@ -223,7 +231,8 @@ async function downloadImage(url) {
     return { bytes, mime, filename: MIME_BY_EXT[extname(fromUrl).slice(1).toLowerCase()] ? fromUrl : `image-${Date.now()}.${mime.split("/")[1] ?? "bin"}` };
 }
 
-async function commandContext(base, context, flags) {
+async function commandContext(base, flags) {
+    const context = await callApi(base, "GET", "/api/ingest/context");
     if (flags.lines !== true) {
         if (typeof flags.taxonomy === "string") {
             printJson(context.terms[flags.taxonomy] ?? [], flags.pretty === true);
@@ -334,15 +343,18 @@ async function main(argv) {
         process.stdout.write(USAGE);
         return command === undefined ? 1 : 0;
     }
-    const known = ["context", "lookup", "stage", "preview", "ingest"];
+    const known = ["health", "context", "lookup", "stage", "preview", "ingest"];
     if (!known.includes(command)) {
         fail(`未知命令：${command}\n\n${USAGE}`);
     }
 
-    const { base, context } = await resolveBase();
+    const { base, health } = await resolveBase();
     switch (command) {
+        case "health":
+            printJson({ base, ...health }, flags.pretty === true);
+            return 0;
         case "context":
-            return commandContext(base, context, flags);
+            return commandContext(base, flags);
         case "lookup":
             return commandLookup(base, flags, positional);
         case "stage":

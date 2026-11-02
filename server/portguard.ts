@@ -57,11 +57,26 @@ function imageOf(pid: number): string | null {
     }
 }
 
-/** True when the HTTP endpoint on the port answers with this tool's
- * /api/state shape — the only kind of squatter we ever kill. Probed on both
- * stacks: a Vite orphan binds ::1, our own server binds 127.0.0.1. */
-export async function isOurStateEndpoint(port: number): Promise<boolean> {
+/** True when the HTTP endpoint on the port answers as this tool — the only
+ * kind of squatter we ever kill. Probed on both stacks: a Vite orphan binds
+ * ::1, our own server binds 127.0.0.1.
+ *
+ * /api/health answers first because it is one small object; the /api/state
+ * probe stays as the fallback so taking over a build from before /api/health
+ * existed still works. */
+export async function isOurEndpoint(port: number): Promise<boolean> {
     for (const host of ["127.0.0.1", "[::1]"]) {
+        try {
+            const health = await fetch(`http://${host}:${port}/api/health`, { signal: AbortSignal.timeout(1500) });
+            if (health.ok) {
+                const body = (await health.json()) as { app?: unknown } | null;
+                if (body !== null && typeof body === "object" && body.app === "aiya-publisher") {
+                    return true;
+                }
+            }
+        } catch {
+            // try the other stack
+        }
         try {
             const response = await fetch(`http://${host}:${port}/api/state`, { signal: AbortSignal.timeout(1500) });
             if (!response.ok) {

@@ -30,7 +30,7 @@ import { fileServeState } from "./fileserveState.js";
 import { appliedSince, applyResult, buildQueue } from "./netdisklane.js";
 import { ensureStagingDir, findStagingDir, openStagingDir } from "./dirs.js";
 import { readableImage, stageImage, StageError } from "./images.js";
-import { isOurStateEndpoint, killTree, listenerPid } from "./portguard.js";
+import { isOurEndpoint, killTree, listenerPid } from "./portguard.js";
 import { getProgress, setProgress } from "./progress.js";
 import { normalizeSiteUrl, ping, uploadImage, WpError } from "./wp.js";
 import { parseCsv } from "../shared/csv.js";
@@ -46,6 +46,11 @@ import {
     todoGroupConfig,
 } from "../shared/fileserve.js";
 import { termPath, type TermOption } from "../shared/terms.js";
+
+/** Stamped by the Electron shell from app.getVersion(); "dev" under tsx/vite. */
+const APP_VERSION = process.env.PUBLISHER_VERSION ?? "dev";
+/** Process start, so /api/health can report uptime without keeping a timer. */
+const STARTED_AT = new Date().toISOString();
 
 export async function buildApp(): Promise<FastifyInstance> {
     const app = Fastify({ logger: false, bodyLimit: 16 * 1024 * 1024 });
@@ -141,6 +146,29 @@ function errorMessage(error: unknown): string {
         const config = todoGroupConfig(parseNetdiskTodo(settings.netdiskTodoGroups));
         return config === null ? null : JSON.stringify(config);
     };
+
+    // --- 探活 ---------------------------------------------------------------
+    // The first call any outside client makes: an agent's preflight, the
+    // netdisk script, a port squatter check. Cheap by construction — no rows,
+    // no vocabulary, no credentials — and shaped so "is this the publisher?"
+    // is answered by one field instead of by sniffing a full state dump.
+    app.get("/api/health", async () => {
+        const settings = getSettings();
+        return {
+            app: "aiya-publisher",
+            version: APP_VERSION,
+            port: PUBLISHER_PORT,
+            pid: process.pid,
+            startedAt: STARTED_AT,
+            uptimeSec: Math.round(process.uptime()),
+            dataDir: path.dirname(dbPath),
+            /** Credentials present, so a push (and the image upload it does)
+             * can actually run. Drafting works without it; publishing will not. */
+            configured: Boolean(settings.siteUrl && settings.username && settings.appPassword),
+            defaultStatus: settings.newRowStatus,
+            ingestMaxRows: INGEST_MAX_ROWS,
+        };
+    });
 
     app.get("/api/state", async () => {
         const settings = getSettings();
@@ -929,7 +957,7 @@ const isEntry = (() => {
 export async function listenWithPortguard(port: number = PUBLISHER_PORT): Promise<FastifyInstance> {
     // The retry exists for the hard-kill orphan: a publisher killed without
     // its signal handlers leaves the old server holding the port, and the
-    // portguard evicts exactly that squatter (our own /api/state fingerprint)
+    // portguard evicts exactly that squatter (our own /api/health fingerprint)
     // before the second bind attempt. Anything else on the port aborts with
     // its PID instead of being touched.
     for (let attempt = 0; ; attempt += 1) {
@@ -951,7 +979,7 @@ export async function listenWithPortguard(port: number = PUBLISHER_PORT): Promis
                 throw error;
             }
             const squatter = listenerPid(port);
-            if (!squatter || !(await isOurStateEndpoint(port))) {
+            if (!squatter || !(await isOurEndpoint(port))) {
                 logEvent("error", "应用", `端口 ${port} 被其它进程占用，无法启动（PID ${squatter?.pid ?? "?"}）`);
                 console.error(
                     `端口 ${port} 被其它进程占用（PID ${squatter?.pid ?? "?"}${squatter?.image ? `，${squatter.image}` : ""}）——不是本工具实例，请自行处理后再启动。`,
