@@ -60,4 +60,4 @@
 | `resource_other` | 完结 · 连载 · 官方中文 |
 | `resource_author` | 作者名。译者不进这一列 |
 | `resource_content` | 题材 0–6 个 |
-| `resource_original` / `resource_character` | **留空**：书籍类基本不适用，不要硬填改编源 |
+| `resource_original` / `resource_character` | **留空**：书籍类基本不适用，改编源在这里落不上 |
