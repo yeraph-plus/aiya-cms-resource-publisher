@@ -9,6 +9,9 @@ import LogConsole from "./components/LogConsole";
 
 export type Filter = "all" | "dirty" | "conflict" | "new" | "missing";
 
+/** 正文 view preference. v2: the default flipped to 预览, see `contentMode`. */
+const CONTENT_MODE_KEY = "publisher.contentMode.v2";
+
 interface Toast {
     kind: "ok" | "err";
     text: string;
@@ -51,8 +54,13 @@ export default function App() {
     const [detailTab, setDetailTab] = useState<DetailTab>(() =>
         window.localStorage.getItem("publisher.detailTab") === "props" ? "props" : "body",
     );
+    // 预览 is the view the body opens in: picking a row is usually "what does
+    // this post look like", and the source is one click away. The key is
+    // versioned because the previous one was written by a build whose default
+    // was 编辑 — every "edit" stored there means "never touched it", so reading
+    // that key would hold the panel on the old default forever.
     const [contentMode, setContentMode] = useState<ContentMode>(() =>
-        window.localStorage.getItem("publisher.contentMode") === "preview" ? "preview" : "edit",
+        window.localStorage.getItem(CONTENT_MODE_KEY) === "edit" ? "edit" : "preview",
     );
     const changeDetailTab = (next: DetailTab) => {
         setDetailTab(next);
@@ -60,7 +68,7 @@ export default function App() {
     };
     const changeContentMode = (next: ContentMode) => {
         setContentMode(next);
-        window.localStorage.setItem("publisher.contentMode", next);
+        window.localStorage.setItem(CONTENT_MODE_KEY, next);
     };
 
     const startDrag = (event: React.PointerEvent) => {

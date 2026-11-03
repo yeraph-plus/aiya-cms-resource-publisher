@@ -411,7 +411,24 @@ export default function Detail({ row, state, busy, tab, onTab, mode, onMode, onE
                         <HtmlEditor value={draft.content} onChange={(content) => update({ content })} visible={mode === "edit"} />
                     </div>
                     <div className={`h-full ${mode === "preview" ? "" : "hidden"}`}>
-                        <HtmlPreview content={draft.content} siteUrl={state.settings.siteUrl} />
+                        {/* 预览 opens by default, and an empty body renders to a
+                            blank page — a new row would look broken. Say what is
+                            missing and hand over the one action that fixes it. */}
+                        {draft.content.trim() === "" ? (
+                            <div className="h-full grid place-items-center rounded border border-dashed border-neutral-200 px-6 text-center">
+                                <div className="space-y-2">
+                                    <p className="text-sm text-neutral-500">正文还是空的</p>
+                                    <button className="btn" onClick={() => onMode("edit")}>
+                                        开始写正文
+                                    </button>
+                                    <p className="text-[11px] text-neutral-400">
+                                        也可以把图片拖到上面的虚线区，先插图再写。
+                                    </p>
+                                </div>
+                            </div>
+                        ) : (
+                            <HtmlPreview content={draft.content} siteUrl={state.settings.siteUrl} />
+                        )}
                     </div>
                 </div>
 
