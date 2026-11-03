@@ -28,7 +28,6 @@ import { runSync } from "./sync.js";
 import { runPush } from "./push.js";
 import { fileServeState } from "./fileserveState.js";
 import { appliedSince, applyResult, buildQueue } from "./netdisklane.js";
-import { ensureStagingDir, findStagingDir, openStagingDir } from "./dirs.js";
 import { readableImage, stageImage, StageError } from "./images.js";
 import { isOurEndpoint, killTree, listenerPid } from "./portguard.js";
 import { getProgress, setProgress } from "./progress.js";
@@ -193,8 +192,6 @@ function errorMessage(error: unknown): string {
                 proxyUrl: settings.proxyUrl,
                 defaultAuthorId: settings.defaultAuthorId,
                 lastSyncCursor: settings.lastSyncCursor,
-                workRoot: settings.workRoot,
-                dirNameSuffix: settings.dirNameSuffix,
                 newRowStatus: settings.newRowStatus,
                 netdiskTodoEnabled: settings.netdiskTodoEnabled,
                 netdiskTodoGroups: settings.netdiskTodoGroups,
@@ -221,16 +218,6 @@ function errorMessage(error: unknown): string {
         }
         if (body.defaultAuthorId !== undefined) {
             setSetting("defaultAuthorId", body.defaultAuthorId === null ? null : String(body.defaultAuthorId));
-        }
-        if (body.workRoot !== undefined) {
-            setSetting("workRoot", String(body.workRoot ?? "").trim());
-        }
-        if (body.dirNameSuffix !== undefined) {
-            const suffix = String(body.dirNameSuffix);
-            if (!["slug", "title", "none"].includes(suffix)) {
-                return reply.code(400).send({ error: "目录命名后缀无效。" });
-            }
-            setSetting("dirNameSuffix", suffix);
         }
         if (body.newRowStatus !== undefined) {
             const status = String(body.newRowStatus);
@@ -783,49 +770,6 @@ function errorMessage(error: unknown): string {
             logEvent("error", "上传", `${parsed.filename}：${errorMessage(error)}`);
             return reply.code(400).send({ error: errorMessage(error) });
         }
-    });
-
-    // --- Local staging directories (本地目录，纯本地辅助) ---------------------
-    // A convenience for staging files locally before the client upload; the
-    // netdisk lane neither reads nor requires it — the script names and
-    // creates the netdisk folder itself from the queue item. A blocked ensure
-    // is an expected condition (unpublished row, unconfigured root), so
-    // ensure answers 200 with status "blocked"; open answers 400 so a clicked
-    // button shows the reason.
-
-    app.post("/api/fileserve-dir/ensure", async (request, reply) => {
-        const body = (request.body ?? {}) as { localId?: unknown };
-        const localId = Number(body.localId);
-        if (!Number.isInteger(localId) || localId <= 0) {
-            return reply.code(400).send({ error: "缺少 localId。" });
-        }
-        return ensureStagingDir(localId);
-    });
-
-    app.post("/api/fileserve-dir/open", async (request, reply) => {
-        const body = (request.body ?? {}) as { localId?: unknown };
-        const localId = Number(body.localId);
-        if (!Number.isInteger(localId) || localId <= 0) {
-            return reply.code(400).send({ error: "缺少 localId。" });
-        }
-        const result = openStagingDir(localId);
-        if (result.status === "blocked") {
-            return reply.code(400).send({ error: result.reason });
-        }
-        return result;
-    });
-
-    app.get("/api/fileserve-dir/:localId", async (request, reply) => {
-        const localId = Number((request.params as { localId: string }).localId);
-        const row = getPost(localId);
-        if (!row) {
-            return reply.code(404).send({ error: "本地行不存在。" });
-        }
-        if (row.postId === null) {
-            return { dir: null, name: null };
-        }
-        const found = findStagingDir(row.postId);
-        return { dir: found?.dir ?? null, name: found?.name ?? null };
     });
 
     // --- Netdisk share lane (网盘分享回填) -----------------------------------

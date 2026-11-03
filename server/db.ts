@@ -85,6 +85,11 @@ if (!columnsOf("terms").includes("parent")) {
     db.exec("ALTER TABLE terms ADD COLUMN parent INTEGER NOT NULL DEFAULT 0");
 }
 
+// Rows, not columns: `settings` is a key/value table, so the two keys that
+// configured the local staging folders (`workRoot`, `dirNameSuffix`) would
+// otherwise sit there forever with nothing reading them.
+db.exec("DELETE FROM settings WHERE key IN ('workRoot', 'dirNameSuffix')");
+
 export function getSetting(key: string): string | null {
     const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string | null } | undefined;
     return row?.value ?? null;
@@ -103,11 +108,6 @@ export interface SettingsShape {
     proxyUrl: string;
     defaultAuthorId: number | null;
     lastSyncCursor: string | null;
-    /** Root where local staging directories are created (纯本地辅助；网盘
-     * lane 不读它); "" = unset. */
-    workRoot: string;
-    /** What follows the padded post id in a staged folder's name. */
-    dirNameSuffix: string;
     /** Status a row created without an explicit one gets (摄取/CSV/新建行). */
     newRowStatus: string;
     /** Attach the selected netdisk pipelines as empty-link work orders to every
@@ -125,8 +125,6 @@ export function getSettings(): SettingsShape {
         proxyUrl: getSetting("proxyUrl") ?? "",
         defaultAuthorId: getSetting("defaultAuthorId") ? Number(getSetting("defaultAuthorId")) : null,
         lastSyncCursor: getSetting("lastSyncCursor"),
-        workRoot: getSetting("workRoot") ?? "",
-        dirNameSuffix: getSetting("dirNameSuffix") ?? "title",
         newRowStatus: getSetting("newRowStatus") === "publish" ? "publish" : "draft",
         netdiskTodoEnabled: getSetting("netdiskTodoEnabled") === "1",
         netdiskTodoGroups: getSetting("netdiskTodoGroups") ?? "",

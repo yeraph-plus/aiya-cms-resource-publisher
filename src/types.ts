@@ -15,8 +15,6 @@ export interface SettingsDTO {
     proxyUrl: string;
     defaultAuthorId: number | null;
     lastSyncCursor: string | null;
-    workRoot: string;
-    dirNameSuffix: string;
     /** Status a row created without one gets (摄取/新建行). */
     newRowStatus: string;
     /** Attach the selected netdisk pipelines to every brand-new row. */

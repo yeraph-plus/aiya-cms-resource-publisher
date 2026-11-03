@@ -15,8 +15,6 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
     const [appPassword, setAppPassword] = useState("");
     const [proxyUrl, setProxyUrl] = useState(state.settings.proxyUrl);
     const [defaultAuthorId, setDefaultAuthorId] = useState<number | null>(state.settings.defaultAuthorId);
-    const [workRoot, setWorkRoot] = useState(state.settings.workRoot);
-    const [dirNameSuffix, setDirNameSuffix] = useState(state.settings.dirNameSuffix);
     const [newRowStatus, setNewRowStatus] = useState(state.settings.newRowStatus);
     const [netdiskTodoEnabled, setNetdiskTodoEnabled] = useState(state.settings.netdiskTodoEnabled);
     const [netdiskTodo, setNetdiskTodo] = useState<string[]>(parseNetdiskTodo(state.settings.netdiskTodoGroups));
@@ -42,8 +40,6 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
         ...(appPassword.trim() !== "" ? { appPassword: appPassword.trim() } : {}),
         proxyUrl,
         defaultAuthorId,
-        workRoot,
-        dirNameSuffix,
         newRowStatus,
         netdiskTodoEnabled,
         netdiskTodoGroups: netdiskTodo.join(","),
@@ -136,23 +132,6 @@ export default function SettingsPanel({ state, onClose, onSaved }: Props) {
                             </option>
                         ))}
                     </select>
-
-                    <label className="text-right text-neutral-500">本地目录创建根</label>
-                    <input
-                        value={workRoot}
-                        onChange={(event) => setWorkRoot(event.target.value)}
-                        placeholder="本地目录辅助的根位置，如 D:\\网盘发布（可空 = 不自动创建；网盘回填不依赖它）"
-                    />
-
-                    <label className="text-right text-neutral-500">目录命名</label>
-                    <select value={dirNameSuffix} onChange={(event) => setDirNameSuffix(event.target.value)}>
-                        <option value="slug">ID-SLUG</option>
-                        <option value="title">ID-标题</option>
-                        <option value="none">仅 ID</option>
-                    </select>
-                    <span className="col-span-2 text-xs text-neutral-500">
-                        只作用于本地暂存目录：ID-SLUG 取线上 permalink 末段，没有 slug 的行回落标题（历史行要重新同步才会有 slug）。网盘目录由油猴脚本固定用 CA+补零6位ID，不跟随这里。
-                    </span>
 
                     <label className="text-right text-neutral-500">新行默认状态</label>
                     <select value={newRowStatus} onChange={(event) => setNewRowStatus(event.target.value)}>

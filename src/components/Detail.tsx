@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ContentMode, DetailTab, RowDTO, StateDTO } from "../types";
 import { TAXONOMY_LABELS, TAXONOMY_ORDER } from "../types";
-import { ensureStagingDir, fetchStagingDir, openStagingDir, saveRow, stageImage, type RowPatch } from "../api";
+import { saveRow, stageImage, type RowPatch } from "../api";
 import { groupTermsByRoot, mergeTermTokens, splitTermInput, termPath, type TermOption } from "../../shared/terms";
 import FileServeEditor from "./FileServeEditor";
 import HtmlEditor from "./HtmlEditor";
@@ -12,7 +12,6 @@ import { prependImageTags, toBase64 } from "../../shared/image-upload";
 interface Props {
     row: RowDTO;
     state: StateDTO;
-    busy: boolean;
     /** The open tab / view live in the App: switching rows keeps them. */
     tab: DetailTab;
     onTab: (tab: DetailTab) => void;
@@ -46,7 +45,7 @@ const TABS: { id: DetailTab; label: string }[] = [
     { id: "props", label: "属性" },
 ];
 
-export default function Detail({ row, state, busy, tab, onTab, mode, onMode, onEdit, discardFlush, notify }: Props) {
+export default function Detail({ row, state, tab, onTab, mode, onMode, onEdit, discardFlush, notify }: Props) {
     const draftFromRow = (source: RowDTO): Draft => ({
         status: source.status,
         title: source.title,
@@ -254,60 +253,6 @@ export default function Detail({ row, state, busy, tab, onTab, mode, onMode, onE
         }
         const found = termOptions(taxonomy).find((option) => option.id === Number(ref));
         return found ? found.name : `#${ref}`;
-    };
-
-    // --- 本地目录（纯本地辅助）-----------------------------------------------
-    // Staging folder for files pending the client upload; purely local — the
-    // netdisk lane names and creates its folder netdisk-side and never reads
-    // this. Keyed by the site's post id; adding the first group triggers it.
-    const [localDir, setLocalDir] = useState<{ dir: string | null; name: string | null } | null>(null);
-    useEffect(() => {
-        if (row.postId === null) {
-            setLocalDir(null);
-            return;
-        }
-        let alive = true;
-        void fetchStagingDir(row.localId)
-            .then((result) => {
-                if (alive) {
-                    setLocalDir(result);
-                }
-            })
-            .catch(() => {});
-        return () => {
-            alive = false;
-        };
-    }, [row.localId, row.postId]);
-
-    const triggerStaging = () => {
-        if (row.postId === null) {
-            return;
-        }
-        void ensureStagingDir(row.localId)
-            .then((result) => {
-                if (result.dir !== null) {
-                    setLocalDir({ dir: result.dir, name: result.name });
-                    if (result.status === "created" || result.status === "claimed") {
-                        notify("ok", `本地目录已就绪：${result.name}`);
-                    }
-                }
-            })
-            .catch(() => {
-                // Blocked states are logged server-side; nothing to say here.
-            });
-    };
-
-    const onOpenDir = () => {
-        void (async () => {
-            try {
-                const result = await openStagingDir(row.localId);
-                if (result.dir !== null) {
-                    setLocalDir({ dir: result.dir, name: result.name });
-                }
-            } catch (error) {
-                notify("err", String(error));
-            }
-        })();
     };
 
     const badges = [
@@ -561,38 +506,8 @@ export default function Detail({ row, state, busy, tab, onTab, mode, onMode, onE
                     })}
 
                     <div>
-                        <span className="lbl">本地目录（可选的本地暂存）</span>
-                        {row.postId === null ? (
-                            <p className="text-xs text-neutral-400">这一行还没推送到站点；先推送发布，再建本地目录。</p>
-                        ) : (
-                            <div className="flex flex-wrap items-center gap-2 text-xs">
-                                {localDir?.name ? (
-                                    <>
-                                        <span className="font-mono">{localDir.name}</span>
-                                        <button className="btn" disabled={busy} onClick={onOpenDir}>
-                                            打开目录
-                                        </button>
-                                    </>
-                                ) : (
-                                    <>
-                                        <span className="text-neutral-400">尚未创建</span>
-                                        <button className="btn" disabled={busy} onClick={onOpenDir}>
-                                            创建目录
-                                        </button>
-                                    </>
-                                )}
-                                <span className="text-neutral-400">纯本地暂存辅助，网盘回填不依赖它；目录会在下方添加数据组时自动创建。</span>
-                            </div>
-                        )}
-                    </div>
-
-                    <div>
                         <span className="lbl">文件列表（aiya_core_fileserve）</span>
-                        <FileServeEditor
-                            config={draft.fileserve}
-                            onChange={(config) => update({ fileserve: config })}
-                            onGroupAdded={triggerStaging}
-                        />
+                        <FileServeEditor config={draft.fileserve} onChange={(config) => update({ fileserve: config })} />
                     </div>
 
                     <div className="text-xs text-neutral-400 space-y-0.5">

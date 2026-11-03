@@ -108,9 +108,9 @@
     }
 
     /** The netdisk folder's name: CA + the post id zero-padded to six
-     * digits (CA003276). Deliberately independent of the tool's 目录命名
-     * setting — the netdisk folder keeps one stable shape, so changing that
-     * setting never renames or re-creates folders here. */
+     * digits (CA003276). Independent of the `000501-标题` label the queue
+     * carries — the netdisk folder keeps one stable shape, so nothing the
+     * tool renames can rename or re-create folders here. */
     function folderName(postId) {
         return `CA${String(postId).padStart(6, "0")}`;
     }
@@ -413,7 +413,7 @@
         return publisherFetch(`/api/netdisk/queue?netdisk=${encodeURIComponent(PIPELINE)}`)
             .then((data) => {
                 // The folder name is the script's, not the server's: the
-                // queue's dirName follows the tool's 目录命名 setting, which the
+                // queue's dirName is the tool's own 000501-标题 label, which the
                 // netdisk side deliberately ignores.
                 queue = data.queue.map((item) => ({ ...item, dirName: folderName(item.postId) }));
                 renderQueue();

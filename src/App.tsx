@@ -483,7 +483,6 @@ export default function App() {
                                 key={`${selected.localId}:${revision}`}
                                 row={selected}
                                 state={state}
-                                busy={busy}
                                 tab={detailTab}
                                 onTab={changeDetailTab}
                                 mode={contentMode}

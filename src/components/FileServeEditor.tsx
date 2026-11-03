@@ -15,14 +15,11 @@ import {
 interface Props {
     config: FileServeConfig | null;
     onChange: (config: FileServeConfig | null) => void;
-    /** Fires whenever a brand-new group id is added — the local staging-dir
-     * trigger (纯本地辅助，网盘 lane 不读它). */
-    onGroupAdded?: () => void;
 }
 
 const ADAPTER_IDS = Object.keys(ADAPTER_FIELDS);
 
-export default function FileServeEditor({ config, onChange, onGroupAdded }: Props) {
+export default function FileServeEditor({ config, onChange }: Props) {
     const groups = config ?? {};
     const entries = Object.entries(groups).sort(([a], [b]) => Number(a) - Number(b));
 
@@ -33,7 +30,6 @@ export default function FileServeEditor({ config, onChange, onGroupAdded }: Prop
     const addGroup = (): void => {
         const id = nextId(groups);
         commit({ ...groups, [id]: emptyGroup("platform") });
-        onGroupAdded?.();
     };
 
     const removeGroup = (id: string): void => {

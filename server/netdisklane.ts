@@ -9,22 +9,22 @@
  */
 
 import { normalizeConfig, groupNetdisk, netdiskLabel, priceDefault } from "../shared/fileserve.js";
-import { coerceDirNameSuffix, stagingDirName } from "../shared/staging-name.js";
-import { getPost, getSettings, listPosts, logEvent, updatePostRow, type PostRow } from "./db.js";
+import { stagingDirName } from "../shared/staging-name.js";
+import { getPost, listPosts, logEvent, updatePostRow, type PostRow } from "./db.js";
 
 // --- 网盘目录命名 -----------------------------------------------------------
-// Folder names come from shared/staging-name.ts (post id padded + sanitized
-// title); the lane derives them from the row and never reads the local
-// staging helper.
+// The queue carries the tool's own name for the post (padded id + title); the
+// userscript overrides it with its own CA{padded id} form, so the netdisk side
+// never depends on what is computed here.
 
 export interface QueueItem {
     localId: number;
     postId: number;
     groupId: string;
     netdisk: string;
-    /** The tool's staged folder name (000501-标题, per the 目录命名 setting).
-     *  The 百度 userscript overwrites it with its own CA{padded id} form before
-     *  using it, so netdisk-side this is a label, not the folder's name. */
+    /** The tool's own name for the post (000501-标题). The 百度 userscript
+     * overwrites it with its own CA{padded id} form before using it, so
+     * netdisk-side this is a label, not the folder's name. */
     dirName: string;
     title: string;
     groupTitle: string;
@@ -36,7 +36,6 @@ export interface QueueItem {
  * group, so pipelines cannot clobber each other. Groups predating the
  * field default to baidu. */
 export function buildQueue(netdisk: string): QueueItem[] {
-    const suffix = coerceDirNameSuffix(getSettings().dirNameSuffix);
     const queue: QueueItem[] = [];
     for (const row of listPosts()) {
         if (row.postId === null || row.fileserve === null) {
@@ -59,11 +58,7 @@ export function buildQueue(netdisk: string): QueueItem[] {
                 postId: row.postId,
                 groupId: id,
                 netdisk: owner,
-                dirName: stagingDirName(row.postId, {
-                    title: row.title,
-                    slug: row.slug,
-                    suffix,
-                }),
+                dirName: stagingDirName(row.postId, row.title),
                 title: row.title,
                 groupTitle: typeof group.title === "string" && group.title !== "" ? group.title : netdiskLabel(owner),
                 price: typeof group.price === "number" ? group.price : priceDefault("platform"),
