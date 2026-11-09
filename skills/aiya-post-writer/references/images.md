@@ -40,6 +40,17 @@ node skills/aiya-post-writer/scripts/publisher.mjs stage --url "https://…/cove
 node skills/aiya-post-writer/scripts/publisher.mjs stage "D:/tmp/keyvisual.png"
 ```
 
+**图床直连不通时**：`stage --url` 是脚本内裸 `fetch`，不读系统代理，所以 itch.io 的 `img.itch.zone`、Steam 的 CDN 在直连失败时它只会报「下载失败」。先用取页脚本把图落盘（它会自动换代理），再暂存本地路径：
+
+```bash
+node skills/aiya-post-writer/scripts/fetch-url.mjs "https://img.itch.zone/…/original/xxxx.png" --out cover.png
+node skills/aiya-post-writer/scripts/publisher.mjs stage cover.png --name "cover.png"
+```
+
+代理与先后顺序见 `verify.md`「网络」。
+
+itch.io 的图同一张有多个尺寸，路径里那一段是**外接框**不是尺寸：`/347x500/`、`/794x1000/`、`/original/`。页面首屏给的是小图，换 `794x1000` 或 `original` 再暂存——宽图塞进 794×1000 的框里出来仍是原比例的 794×446，不是竖版。
+
 返回：
 
 ```json
