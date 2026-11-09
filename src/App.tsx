@@ -47,6 +47,10 @@ export default function App() {
     const [dragging, setDragging] = useState(false);
     const widthRef = useRef(detailWidth);
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Cursor of the external-writer channel: the newest local_id already drawn
+    // in this tab. Rows above it were written by someone else and are pulled in
+    // by the poll below.
+    const changeCursor = useRef(0);
 
     // Which detail tab / view is open. Owned here rather than inside Detail
     // because Detail is keyed by row: a row switch remounts it, and the panel
@@ -102,12 +106,42 @@ export default function App() {
         try {
             const next = await api.fetchState();
             setState(next);
+            // A full read draws everything, so the external-writer cursor moves
+            // to whatever the server just called newest.
+            changeCursor.current = next.posts.reduce((max, row) => Math.max(max, row.localId), 0);
             return next;
         } catch (error) {
             notify("err", `读取本地状态失败：${String(error)}`);
             return null;
         }
     }, [notify]);
+
+    /**
+     * Splices rows that arrived from outside this tab into the loaded table.
+     * Only the listed rows are replaced, so a draft open in the detail panel
+     * keeps its text — a full refresh would push the server's copy over it
+     * mid-typing.
+     */
+    const applyRows = useCallback((incoming: RowDTO[]) => {
+        if (incoming.length === 0) {
+            return;
+        }
+        setState((previous) => {
+            if (!previous) {
+                return previous;
+            }
+            const merged = new Map(previous.posts.map((row) => [row.localId, row]));
+            for (const row of incoming) {
+                merged.set(row.localId, row);
+            }
+            return {
+                ...previous,
+                // Sorted like the server's own query, so a spliced row lands in
+                // the position a refresh would have put it in.
+                posts: [...merged.values()].sort((left, right) => left.localId - right.localId),
+            };
+        });
+    }, []);
 
     /**
      * Replaces a single row in the loaded state, appending it when the row is
@@ -118,22 +152,12 @@ export default function App() {
      * only refetched by the operations that really do move many rows — 拉取,
      * 设置保存, CSV 导入.
      */
-    const applyRow = useCallback((row: RowDTO) => {
-        setState((previous) => {
-            if (!previous) {
-                return previous;
-            }
-            const known = previous.posts.some((item) => item.localId === row.localId);
-            return {
-                ...previous,
-                // Appended at the end: the server orders by local_id, so a
-                // brand-new row is the last one there too.
-                posts: known
-                    ? previous.posts.map((item) => (item.localId === row.localId ? row : item))
-                    : [...previous.posts, row],
-            };
-        });
-    }, []);
+    const applyRow = useCallback(
+        (row: RowDTO) => {
+            applyRows([row]);
+        },
+        [applyRows],
+    );
 
     /** Drops one row locally; nothing else in the table moves. */
     const removeRow = useCallback((localId: number) => {
@@ -192,6 +216,41 @@ export default function App() {
             clearInterval(timer);
         };
     }, [applyRow]);
+
+    // An ingest is an HTTP call from an agent, not a click in this tab: the new
+    // rows used to sit in the database until someone pressed 拉取. Poll the
+    // cursor the server keeps for exactly that, splice what came in, and poke
+    // the log console so the 摄取 lines appear with the rows.
+    const loaded = state !== null;
+    useEffect(() => {
+        if (!loaded) {
+            return;
+        }
+        let alive = true;
+        const timer = setInterval(() => {
+            void (async () => {
+                try {
+                    const changes = await api.fetchChanges(changeCursor.current);
+                    if (!alive) {
+                        return;
+                    }
+                    // Math.max: a refresh can move the cursor past this answer
+                    // while the request is in flight.
+                    changeCursor.current = Math.max(changeCursor.current, changes.cursor);
+                    if (changes.rows.length > 0) {
+                        applyRows(changes.rows);
+                        setLogTick((tick) => tick + 1);
+                    }
+                } catch {
+                    // Transient — the server may be restarting; the next tick retries.
+                }
+            })();
+        }, 2000);
+        return () => {
+            alive = false;
+            clearInterval(timer);
+        };
+    }, [loaded, applyRows]);
 
     const withBusy = useCallback(
         async (task: () => Promise<void>) => {

@@ -205,6 +205,26 @@ export function listPosts(): PostRow[] {
     return rows.map(fromDb);
 }
 
+/**
+ * Rows created after `localId`, oldest first. This is the whole of the
+ * external-writer channel: an ingest (or a CSV import from another tab) adds
+ * rows and nothing else, so the newest local_id is a complete cursor — see
+ * `/api/changes`. Edits to existing rows are not reported here; the netdisk
+ * lane has its own cursor for the one external writer that patches rows.
+ */
+export function listPostsAfter(localId: number, limit: number): PostRow[] {
+    const rows = db
+        .prepare(`SELECT ${POST_FIELDS} FROM posts WHERE local_id > ? ORDER BY local_id LIMIT ?`)
+        .all(localId, limit) as PostDbRow[];
+    return rows.map(fromDb);
+}
+
+/** The cursor an idle client sits on: the newest local_id in the table. */
+export function maxLocalId(): number {
+    const row = db.prepare("SELECT IFNULL(MAX(local_id), 0) AS id FROM posts").get() as { id: number };
+    return row.id;
+}
+
 export function listDirtyPosts(localIds?: number[]): PostRow[] {
     if (localIds && localIds.length > 0) {
         const placeholders = localIds.map(() => "?").join(",");

@@ -23,6 +23,19 @@ export function fetchState(): Promise<StateDTO> {
     return call<StateDTO>("/api/state", "GET");
 }
 
+export interface ChangesResult {
+    /** The newest local_id this answer covers — the cursor for the next call. */
+    cursor: number;
+    /** Rows created after the cursor, oldest first. Empty when nothing landed. */
+    rows: RowDTO[];
+}
+
+/** Rows that appeared since `after` — what an ingest from outside this tab
+ * leaves behind. The caller splices them into the table; nothing else moves. */
+export function fetchChanges(after: number): Promise<ChangesResult> {
+    return call<ChangesResult>(`/api/changes?after=${after}`, "GET");
+}
+
 export interface RowPatch {
     status?: string;
     title?: string;

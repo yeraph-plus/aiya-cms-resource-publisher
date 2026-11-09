@@ -15,9 +15,11 @@ import {
     listAuthors,
     listLogs,
     listPosts,
+    listPostsAfter,
     listTerms,
     listTermUsage,
     logEvent,
+    maxLocalId,
     parseSnapshot,
     setSetting,
     setTermRefs,
@@ -633,6 +635,25 @@ function errorMessage(error: unknown): string {
         }
         logEvent("info", "摄取", `摄取结束：新增 ${localIds.length} 行，失败 ${built.errors.length} 行（来源 ${source}）`);
         return { imported: localIds.length, localIds, errors: built.errors, warnings: built.warnings };
+    });
+
+    // An ingest arrives over HTTP from an agent, not from this tab, so the
+    // table had no way of hearing about it: the new rows sat in the database
+    // until someone pressed 拉取. This cursor is that channel — the client
+    // keeps the newest local_id it has drawn, asks for anything above it, and
+    // splices those rows in instead of rebuilding the whole table.
+    const CHANGE_BATCH = 500;
+    app.get("/api/changes", async (request) => {
+        const query = request.query as { after?: string };
+        const parsed = Number(query.after ?? "0");
+        const after = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+        const rows = listPostsAfter(after, CHANGE_BATCH);
+        return {
+            // A capped batch advances to its own last row, not to the table's
+            // newest, or the rows past the cap would never be read.
+            cursor: rows.length > 0 ? rows[rows.length - 1]!.localId : maxLocalId(),
+            rows: rows.map(rowWithTerms),
+        };
     });
 
     // Pull and push own the site link and the progress slot; they must not
