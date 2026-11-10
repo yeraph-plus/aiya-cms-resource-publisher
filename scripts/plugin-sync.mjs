@@ -1,6 +1,6 @@
 /**
- * Mirrors the bundled plugin (wordpress_plugins/aiya-publish) into the
- * running WordPress install (../wp-content/plugins/aiya-publish). vendor/
+ * Mirrors the bundled plugin (wordpress_plugins/aiya-cms-resource-publisher) into the
+ * running WordPress install (../wp-content/plugins/aiya-cms-publish). vendor/
  * on the target side is left alone — it holds the container-side QA tools
  * (phpunit/phpstan/phpcs) and is installed once, not synced.
  *

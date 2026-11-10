@@ -110,20 +110,30 @@ final class ResourceController
      */
     private function users(): WP_REST_Response
     {
-        $query = new WP_User_Query([
-            'capability__in' => ['edit_posts'],
-            'orderby' => 'display_name',
-            'order' => 'ASC',
-            'number' => 500,
-        ]);
-
+        // Paginated: the tool's list must be every eligible account, and a
+        // single capped query silently truncates past its page size.
         $items = [];
-        foreach ($query->get_results() as $user) {
-            $items[] = [
-                'id' => (int) $user->ID,
-                'login' => $user->user_login,
-                'name' => $user->display_name !== '' ? $user->display_name : $user->user_login,
-            ];
+        $page = 1;
+        for (;;) {
+            $query = new WP_User_Query([
+                'capability__in' => ['edit_posts'],
+                'orderby' => 'display_name',
+                'order' => 'ASC',
+                'number' => 100,
+                'paged' => $page,
+            ]);
+            $results = $query->get_results();
+            foreach ($results as $user) {
+                $items[] = [
+                    'id' => (int) $user->ID,
+                    'login' => $user->user_login,
+                    'name' => $user->display_name !== '' ? $user->display_name : $user->user_login,
+                ];
+            }
+            if (count($results) < 100) {
+                break;
+            }
+            ++$page;
         }
 
         return new WP_REST_Response($items);
