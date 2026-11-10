@@ -245,15 +245,31 @@ export async function runPush(localIds?: number[]): Promise<PushOutcome> {
             outcome.errors.push({ localId: row.localId, title: row.title, message: text });
             outcome.failed += 1;
             logEvent("error", "推送", `#${row.postId ?? "新行"} ${row.title}：${text}`, row.postId ?? undefined);
-            if (error instanceof WpError && error.status === 0) {
-                transportFailures += 1;
-                if (transportFailures >= TRANSPORT_ABORT_LIMIT) {
-                    const remaining = rows.length - index - 1;
-                    outcome.error =
-                        `站点连续 ${transportFailures} 次不可达，已中止本轮推送` +
-                        (remaining > 0 ? `：剩余 ${remaining} 行保持待推送。` : "。");
-                    applyUploadedSources(row.localId, uploaded);
-                    break;
+            if (error instanceof WpError) {
+                if (error.status === 0 || error.status >= 500) {
+                    // Unreachable, or the site answers but its gateway is
+                    // sick (502/503/504): the following rows would each burn
+                    // the full timeout against the same broken backend —
+                    // both count into the same breaker. A 4xx is that row's
+                    // own answer (the site is fine), it resets the count.
+                    transportFailures += 1;
+                    if (transportFailures >= TRANSPORT_ABORT_LIMIT) {
+                        const remaining = rows.length - index - 1;
+                        outcome.error =
+                            `站点连续 ${transportFailures} 次不可达或网关故障，已中止本轮推送` +
+                            (remaining > 0 ? `：剩余 ${remaining} 行保持待推送。` : "。");
+                        applyUploadedSources(row.localId, uploaded);
+                        break;
+                    }
+                } else {
+                    transportFailures = 0;
+                }
+                if (error.status === 404 && row.postId) {
+                    // The resource is gone upstream (deleted or made private
+                    // by hand): surface it in the 线上缺失 filter — the local
+                    // row keeps its state, nothing is destroyed.
+                    updatePostRow(row.localId, { missing: true });
+                    logEvent("warn", "推送", `#${row.postId} ${row.title}：线上已不存在，已标记缺失`, row.postId);
                 }
             } else {
                 transportFailures = 0;
