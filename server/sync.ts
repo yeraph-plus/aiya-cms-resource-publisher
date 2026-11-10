@@ -241,11 +241,15 @@ export async function runSync(): Promise<SyncOutcome> {
             }
         }
 
-        if (maxModified !== "") {
+        // Step the cursor back one second — but only when this pull actually
+        // observed a newer stamp. An empty incremental pull must leave the
+        // boundary where it is: rolling back on every no-change pull would
+        // widen the next window by a second each time, monotonically.
+        if (maxModified !== "" && (!incremental || maxModified > (cursor ?? ""))) {
             // WP datetimes are second-granular and modified_after compares
             // strictly, so posts modified within the same second as the
-            // cursor could be skipped by the next pull. Step the cursor back
-            // one second — re-merging an already-seen row is harmless.
+            // cursor could be skipped by the next pull. Re-merging an
+            // already-seen row is harmless.
             const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(maxModified);
             if (m) {
                 const boundary = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6])));
