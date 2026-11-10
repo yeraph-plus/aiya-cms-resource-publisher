@@ -25,11 +25,6 @@ interface Props {
     notify: (kind: "ok" | "err", text: string) => void;
 }
 
-/** '2020-05-06T07:08:00' → datetime-local value; '' stays empty. */
-function toInput(value: string): string {
-    return value === "" ? "" : value.slice(0, 16);
-}
-
 interface Draft {
     status: string;
     title: string;
@@ -51,7 +46,11 @@ export default function Detail({ row, state, tab, onTab, mode, onMode, onEdit, d
         title: source.title,
         content: source.content,
         authorId: source.authorId,
-        dateLocal: toInput(source.dateLocal),
+        // The date rides through verbatim, seconds included: zeroing them
+        // (the old minute-truncated draft) would silently diverge the row
+        // from its confirmed snapshot and make the next push carry an
+        // explicit date, suppressing the server-side refresh rule.
+        dateLocal: source.dateLocal,
         terms: source.terms,
         fileserve: (source.fileserveParsed ?? null) as FileServeConfig | null,
     });
@@ -84,7 +83,9 @@ export default function Detail({ row, state, tab, onTab, mode, onMode, onEdit, d
                 title: next.title,
                 content: next.content,
                 authorId: next.authorId,
-                dateLocal: next.dateLocal === "" ? "" : `${next.dateLocal}:00`,
+                // Verbatim, seconds included: an untouched date must keep
+                // matching the snapshot byte for byte.
+                dateLocal: next.dateLocal,
                 terms: next.terms,
                 fileserve: Object.keys(config).length > 0 ? config : next.fileserve === null ? null : {},
                 fileserveBase: base,
@@ -412,9 +413,10 @@ export default function Detail({ row, state, tab, onTab, mode, onMode, onEdit, d
                     </div>
 
                     <label className="block">
-                        <span className="lbl">发布时间（站点时区；留空 = 推送时定为当前）</span>
+                        <span className="lbl">发布时间（站点时区；新行留空 = 推送时定为当前）</span>
                         <input
                             type="datetime-local"
+                            step={1}
                             className="w-full"
                             value={draft.dateLocal}
                             onChange={(event) => update({ dateLocal: event.target.value })}

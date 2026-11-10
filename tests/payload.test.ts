@@ -68,6 +68,29 @@ describe("push payload building", () => {
         expect(changed.date).toBe("2021-01-01T00:00:00");
     });
 
+    it("matches snapshot dates second for second, not minute for minute", () => {
+        // WP timestamps carry nonzero seconds. A panel path that truncated
+        // them to minutes used to make every edited row diverge from its
+        // snapshot here and push an explicit date. `07:08:29` vs `07:08:00`
+        // is the exact class this must keep apart.
+        const snapshot = JSON.stringify({
+            status: "publish",
+            title: "标题",
+            content: "正文",
+            authorId: null,
+            dateLocal: "2020-05-06T07:08:29",
+            dateGmt: "2020-05-05T23:08:29",
+            modifiedGmt: "2026-09-28T20:00:00",
+            terms: {},
+            fileserve: null,
+        });
+        const untouched = buildPayload(row({ postId: 367, dateLocal: "2020-05-06T07:08:29", snapshot }), {});
+        expect(untouched.date).toBeUndefined();
+
+        const minuteSlip = buildPayload(row({ postId: 367, dateLocal: "2020-05-06T07:08:00", snapshot }), {});
+        expect(minuteSlip.date).toBe("2020-05-06T07:08:00");
+    });
+
     it("always sends the date for new rows that have one", () => {
         const payload = buildPayload(row({ postId: null, dateLocal: "2020-05-06T07:08:00" }), {});
         expect(payload.date).toBe("2020-05-06T07:08:00");

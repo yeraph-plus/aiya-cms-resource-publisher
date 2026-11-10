@@ -113,6 +113,25 @@ describe("local api contract", () => {
         expect(row.terms).toEqual({ resource_original: ["name:契约标签"] });
     });
 
+    it("stores an edited date with its seconds intact", async () => {
+        // WP timestamps carry nonzero seconds. Storing `:00` for an untouched
+        // date used to diverge the row from its snapshot and make every
+        // following push carry an explicit date.
+        const created = await app.inject({ method: "POST", url: "/api/posts", payload: { title: "秒位行" } });
+        const id = created.json().localId as number;
+
+        const saved = await app.inject({
+            method: "PUT",
+            url: `/api/posts/${id}`,
+            payload: { dateLocal: "2020-05-06T07:08:29" },
+        });
+        expect(saved.statusCode).toBe(200);
+
+        const state = await app.inject({ method: "GET", url: "/api/state" });
+        const row = state.json().posts.find((post: { localId: number }) => post.localId === id);
+        expect(row.dateLocal).toBe("2020-05-06T07:08:29");
+    });
+
     it("answers sync/connect/push even without a reachable site", async () => {
         const connect = await app.inject({ method: "POST", url: "/api/connect", payload: {} });
         expect([200, 502]).toContain(connect.statusCode);
