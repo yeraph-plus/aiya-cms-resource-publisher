@@ -75,9 +75,11 @@ final class FileServeConfigTest extends TestCase
         self::assertNotInstanceOf(WP_Error::class, $config);
         self::assertSame(4, $config['1']['price']);
 
+        // A negative price is below the field minimum: the aiya-core
+        // semantics rejects it — the fold only handles floats and nulls.
         $config = FileServeConfig::normalize(['1' => ['adapter' => 'platform', 'price' => -5]]);
-        self::assertNotInstanceOf(WP_Error::class, $config);
-        self::assertSame(0, $config['1']['price']);
+        self::assertInstanceOf(WP_Error::class, $config);
+        self::assertStringContainsString('below its minimum', $config->get_error_message());
     }
 
     public function testNumbersReadEmptyAsNullAndNumericStringsAsNumbers(): void
@@ -169,4 +171,25 @@ final class FileServeConfigTest extends TestCase
         update_post_meta(100, FileServeConfig::META_KEY, []);
         self::assertNull(FileServeConfig::present(100));
     }
+    public function testABelowMinimumNumberRejectsInsteadOfClamping(): void
+    {
+        // per_page carries min 0: the aiya-core ValueNormalizer semantics is
+        // a rejection, not a clamp — the publishing tool pre-normalizes its
+        // payloads, so the branch answers hand-crafted calls.
+        $config = FileServeConfig::normalize('{"1":{"adapter":"openlist_list","path":"/docs","per_page":-3}}');
+
+        self::assertInstanceOf(WP_Error::class, $config);
+        self::assertStringContainsString('below its minimum', $config->get_error_message());
+    }
+
+    public function testDuplicateGroupIdsKeepTheFirstOccurrence(): void
+    {
+        // Two raw keys reduce to the same id ("1" and "1!"): first wins, so
+        // which one survives does not depend on key order in hand-edited JSON.
+        $config = FileServeConfig::normalize('{"1":{"adapter":"platform","url":"https://first"},"1!":{"adapter":"platform","url":"https://second"}}');
+
+        self::assertNotInstanceOf(WP_Error::class, $config);
+        self::assertSame('https://first', $config['1']['url']);
+    }
+
 }

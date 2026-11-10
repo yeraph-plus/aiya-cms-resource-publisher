@@ -117,6 +117,12 @@ final class FileServeConfig
             }
 
             $group['adapter'] = $adapter;
+            if (isset($config[$id])) {
+                // Two raw keys reduced to the same id ("1" and "1!"): first
+                // wins, matching the aiya-core domain model — which one
+                // survives must not depend on key order in hand-edited JSON.
+                continue;
+            }
             $config[$id] = $group;
         }
 
@@ -211,8 +217,17 @@ final class FileServeConfig
                 );
             }
             $number = (float) $value;
-            if (isset($field['min'])) {
-                $number = max($field['min'], $number);
+            if (isset($field['min']) && $number < (float) $field['min']) {
+                // Below-minimum rejects (the aiya-core ValueNormalizer
+                // semantics) — it does not clamp. The publishing tool
+                // pre-normalizes its payloads, so this only answers a
+                // hand-crafted call.
+                return new WP_Error(
+                    'aiya_publish_fileserve_field',
+                    /* translators: %s: field id. */
+                    sprintf(__('Field %s is below its minimum.', 'aiya-publish'), $key),
+                    ['status' => 400],
+                );
             }
             $normalized[$key] = $number;
         }

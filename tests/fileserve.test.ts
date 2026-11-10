@@ -257,4 +257,15 @@ describe("netdisk todo groups", () => {
         // cannot publish a dead download entry.
         expect(productionConfig(todoGroupConfig(["baidu"])!)).toEqual({});
     });
+    it("keeps the first of two raw keys that reduce to the same id", () => {
+        // Mirror of the PHP normalizers: which one survives must not depend
+        // on key order in hand-edited JSON.
+        const { config, errors } = normalizeConfig({
+            "1": { adapter: "platform", url: "https://first" },
+            "1!": { adapter: "platform", url: "https://second" },
+        });
+        expect(errors).toEqual([]);
+        expect(config["1"]?.url).toBe("https://first");
+    });
+
 });

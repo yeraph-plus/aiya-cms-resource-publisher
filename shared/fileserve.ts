@@ -197,6 +197,11 @@ export function normalizeConfig(raw: unknown): { config: FileServeConfig; errors
                 broken = true;
                 break;
             }
+            // Registered divergence: the PHP normalizers reject a
+            // below-minimum value (aiya-core semantics), this mirror clamps —
+            // the panel's save path does not surface normalize errors, so a
+            // reject here would read as a silent clear of the whole list. The
+            // editor keeps values in range; the branch guards hand-edited data.
             normalized[field.id] = field.min !== undefined ? Math.max(field.min, num) : num;
         }
         if (broken) {
@@ -204,6 +209,12 @@ export function normalizeConfig(raw: unknown): { config: FileServeConfig; errors
         }
 
         normalized.price = Math.max(0, Math.trunc(Number(normalized.price ?? 0)));
+        if (config[id] !== undefined) {
+            // Two raw keys reduced to the same id ("1" and "1!"): first
+            // wins, matching the PHP normalizers — which one survives must
+            // not depend on key order in hand-edited JSON.
+            continue;
+        }
         config[id] = {
             ...normalized,
             adapter,
