@@ -35,8 +35,12 @@ function createWindow(baseUrl) {
     });
 
     // Open target=_blank links (front-end post pages) in the system browser.
+    // Only web URLs pass through: a file:// or custom-scheme handoff would
+    // let injected content reach the OS shell.
     win.webContents.setWindowOpenHandler(({ url }) => {
-        void shell.openExternal(url);
+        if (/^https?:/i.test(url)) {
+            void shell.openExternal(url);
+        }
         return { action: "deny" };
     });
 
