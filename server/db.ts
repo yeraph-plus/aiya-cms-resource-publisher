@@ -310,10 +310,31 @@ function toBind(value: unknown): unknown {
     return JSON.stringify(value);
 }
 
+/** The patch key → column map is a closed set: an unknown key is a caller
+ * bug (or an object smuggled through as any) and must fail loudly here —
+ * interpolating it straight into the SQL would hand the identifier to the
+ * caller instead. */
+function columnOf(key: string): string {
+    const column = COLUMN_OF[key];
+    if (column === undefined) {
+        throw new Error(`unknown post patch key: ${key}`);
+    }
+    return column;
+}
+
+/** Run a function inside one BEGIN/COMMIT — the explicit form for callers
+ * whose correctness depends on read-modify-write not interleaving. */
+export function dbTransaction(fn: () => void): void {
+    db.transaction(fn)();
+}
+
 export function insertPost(patch: PostPatch): number {
     const entries = Object.entries(patch)
         .filter(([, value]) => value !== undefined)
-        .map(([key, value]) => [COLUMN_OF[key] ?? key, toBind(value)] as const);
+        .map(([key, value]) => [columnOf(key), toBind(value)] as const);
+    if (entries.length === 0) {
+        throw new Error("insertPost requires at least one column");
+    }
     const columns = entries.map(([column]) => column);
     const values = entries.map(([, value]) => value);
     const placeholders = entries.map(() => "?").join(", ");
@@ -326,7 +347,7 @@ export function insertPost(patch: PostPatch): number {
 export function updatePostRow(localId: number, patch: PostPatch): void {
     const entries = Object.entries(patch)
         .filter(([, value]) => value !== undefined)
-        .map(([key, value]) => [COLUMN_OF[key] ?? key, toBind(value)] as const);
+        .map(([key, value]) => [columnOf(key), toBind(value)] as const);
     if (entries.length === 0) {
         return;
     }

@@ -685,13 +685,19 @@ function errorMessage(error: unknown): string {
     });
 
     app.post("/api/push", async (request, reply) => {
-        const body = (request.body ?? {}) as { localIds?: number[] };
+        const body = (request.body ?? {}) as { localIds?: unknown };
         if (siteOperation !== null) {
             return slotBusy(reply);
         }
+        // A non-array body means "push everything dirty"; a malformed array
+        // member is a client bug — drop it here rather than let a bad bind
+        // answer 500 deep inside the driver.
+        const localIds = Array.isArray(body.localIds)
+            ? body.localIds.filter((id): id is number => typeof id === "number" && Number.isInteger(id) && id >= 1)
+            : undefined;
         siteOperation = "push";
         try {
-            return await runPush(Array.isArray(body.localIds) ? body.localIds : undefined);
+            return await runPush(localIds);
         } finally {
             setProgress(null);
             siteOperation = null;
