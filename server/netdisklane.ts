@@ -10,7 +10,7 @@
 
 import { normalizeConfig, groupNetdisk, netdiskLabel, priceDefault } from "../shared/fileserve.js";
 import { stagingDirName } from "../shared/staging-name.js";
-import { getPost, listPosts, logEvent, updatePostRow, type PostRow } from "./db.js";
+import { dbTransaction, getPost, listPosts, logEvent, updatePostRow, type PostRow } from "./db.js";
 
 // --- 网盘目录命名 -----------------------------------------------------------
 // The queue carries the tool's own name for the post (padded id + title); the
@@ -155,9 +155,15 @@ export function applyResult(netdisk: string, localId: number, groupId: string, u
     if (typeof group.title !== "string" || group.title.trim() === "") {
         group.title = netdiskLabel(owner);
     }
-    updatePostRow(localId, {
-        fileserve: JSON.stringify(config),
-        dirty: true,
+    // The read-modify-write above is one synchronous block, so nothing in
+    // this single-threaded process can interleave with the panel's PUT —
+    // the transaction keeps that guarantee explicit and holds if the
+    // function ever grows an await or a second writer appears.
+    dbTransaction(() => {
+        updatePostRow(localId, {
+            fileserve: JSON.stringify(config),
+            dirty: true,
+        });
     });
     noteApplied(localId);
     logEvent("info", "网盘", `#${row.postId} ${row.title}：组 #${groupId}（${netdiskLabel(owner)}）分享已回填`, row.postId ?? undefined);
